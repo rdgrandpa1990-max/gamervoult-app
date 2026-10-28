@@ -1,8 +1,24 @@
 import { Router } from 'express';
 import { getFirebaseAdmin } from '../firebase.js';
-import { verifyFirebaseAuth, requireRoles, timingSafeEqualStr } from '../authMiddleware.js';
+import { 
+  verifyFirebaseAuth, 
+  requireRoles, 
+  timingSafeEqualStr,
+  createRateLimiter,
+  validateRequestPayload 
+} from '../authMiddleware.js';
 
 const router = Router();
+
+// Apply prototype pollution & malformed payload guard to all incoming routes
+router.use(validateRequestPayload);
+
+// Dedicated Endpoint Rate Limiters
+const orderCreateLimiter = createRateLimiter(60000, 20);      // 20 order creations per min
+const webhookLimiter = createRateLimiter(60000, 60);          // 60 webhook callbacks per min
+const licenseRedeemLimiter = createRateLimiter(60000, 10);    // 10 key activations per min
+const chatSendLimiter = createRateLimiter(60000, 30);         // 30 support messages per min
+
 
 // Strict URL validation: must be valid HTTPS
 function isValidReleaseUrl(urlStr) {
@@ -151,7 +167,7 @@ router.get('/api/v1/products', async (req, res) => {
 // =========================================================================
 // 4. Order Creation with Server-Side Price Verification
 // =========================================================================
-router.post('/api/v1/orders/create', async (req, res) => {
+router.post('/api/v1/orders/create', orderCreateLimiter, async (req, res) => {
   try {
     const { db } = getFirebaseAdmin();
     if (!db) return res.status(503).json({ success: false, error: 'Database service unavailable' });
@@ -160,6 +176,19 @@ router.post('/api/v1/orders/create', async (req, res) => {
 
     if (!itemId) {
       return res.status(400).json({ success: false, error: 'Missing required field: itemId' });
+    }
+
+    // Extract authenticated user ID if Bearer token present
+    let userId = req.body.userId ? String(req.body.userId).trim() : null;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const { auth } = getFirebaseAdmin();
+        if (auth) {
+          const decoded = await auth.verifyIdToken(authHeader.split('Bearer ')[1].trim());
+          userId = decoded.uid;
+        }
+      } catch {}
     }
 
     // 1. Authoritative Server Catalog Lookup
@@ -203,6 +232,7 @@ router.post('/api/v1/orders/create', async (req, res) => {
       customerName: String(customerName || 'Anonymous Buyer').trim(),
       customerEmail: customerEmail ? String(customerEmail).trim().toLowerCase() : null,
       customerMobile: customerMobile ? String(customerMobile).trim() : null,
+      userId,
       discountApplied,
       couponCode: couponCode || null,
       accountUid: itemData.gameUid || itemData.accountUid || null,
@@ -227,6 +257,75 @@ router.post('/api/v1/orders/create', async (req, res) => {
 
   } catch (err) {
     console.error('[Orders] Create error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to create payment order.' });
+  }
+});
+
+// =========================================================================
+// 4b. User Order History List (/api/v1/orders)
+// =========================================================================
+router.get('/api/v1/orders', verifyFirebaseAuth, async (req, res) => {
+  try {
+    const { db } = getFirebaseAdmin();
+    if (!db) return res.status(503).json({ success: false, error: 'Database service unavailable' });
+
+    let query = db.collection('payment_orders');
+
+    // Strict user isolation: Non-staff users can ONLY retrieve their own orders
+    if (!req.isStaff) {
+      const snap = await query.where('userId', '==', req.uid).limit(50).get();
+      const orders = [];
+      snap.forEach(doc => {
+        const d = doc.data();
+        orders.push({
+          orderCode: d.orderCode || doc.id,
+          itemId: d.itemId,
+          itemTitle: d.itemTitle,
+          amount: d.amount,
+          currency: d.currency || 'INR',
+          status: d.status,
+          createdAt: d.createdAt,
+          paidAt: d.paidAt || null,
+          utr: d.utr || null
+        });
+      });
+
+      return res.status(200).json({
+        success: true,
+        count: orders.length,
+        orders
+      });
+    }
+
+    // Staff view: list all recent orders
+    const snap = await query.orderBy('createdAt', 'desc').limit(50).get();
+    const orders = [];
+    snap.forEach(doc => {
+      const d = doc.data();
+      orders.push({
+        orderCode: d.orderCode || doc.id,
+        itemId: d.itemId,
+        itemTitle: d.itemTitle,
+        amount: d.amount,
+        status: d.status,
+        customerEmail: d.customerEmail,
+        userId: d.userId,
+        createdAt: d.createdAt,
+        paidAt: d.paidAt || null,
+        utr: d.utr || null
+      });
+    });
+
+    return res.status(200).json({
+      success: true,
+      count: orders.length,
+      orders
+    });
+  } catch (err) {
+    console.error('[Orders] List error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to retrieve orders.' });
+  }
+});
     return res.status(500).json({ success: false, error: 'Failed to create payment order.' });
   }
 });
@@ -322,7 +421,7 @@ router.get('/api/v1/orders/:orderCode', async (req, res) => {
 // =========================================================================
 // 6. Hardened Fail-Closed Payment Webhook (/api/webhooks/payment)
 // =========================================================================
-router.post('/api/webhooks/payment', async (req, res) => {
+router.post('/api/webhooks/payment', webhookLimiter, async (req, res) => {
   const { db } = getFirebaseAdmin();
   if (!db) return res.status(503).json({ success: false, error: 'Database unavailable' });
 
@@ -556,6 +655,56 @@ router.get('/api/v1/me', verifyFirebaseAuth, async (req, res) => {
 });
 
 // =========================================================================
+// 8b. Update User Profile (/api/v1/me)
+// =========================================================================
+router.put('/api/v1/me', verifyFirebaseAuth, async (req, res) => {
+  const { db } = getFirebaseAdmin();
+  if (!db) return res.status(503).json({ success: false, error: 'Database service unavailable' });
+
+  try {
+    const { name, phone, bio } = req.body || {};
+
+    // Input validation & length limits
+    if (name && (typeof name !== 'string' || name.length > 80)) {
+      return res.status(400).json({ success: false, error: 'Invalid name: max 80 characters.' });
+    }
+    if (phone && (typeof phone !== 'string' || phone.length > 20)) {
+      return res.status(400).json({ success: false, error: 'Invalid phone: max 20 characters.' });
+    }
+
+    // Explicit Role Tamper Defense:
+    // Ordinary users CANNOT change their own role, VIP status, or subscription expiry
+    if (req.body.role || req.body.status || req.body.isVip || req.body.subscriptionExpiry) {
+      if (!req.isAdmin) {
+        return res.status(403).json({
+          success: false,
+          error: 'FORBIDDEN',
+          message: 'Security Violation: Privileged fields (role, status, VIP) cannot be modified by user.'
+        });
+      }
+    }
+
+    const updates = {
+      updatedAt: new Date().toISOString()
+    };
+    if (name) updates.name = String(name).trim();
+    if (phone) updates.phone = String(phone).trim();
+    if (bio) updates.bio = String(bio).trim().slice(0, 250);
+
+    await db.collection('users').doc(req.uid).set(updates, { merge: true });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Profile updated successfully.',
+      updates
+    });
+  } catch (err) {
+    console.error('[Profile] Update error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to update profile.' });
+  }
+});
+
+// =========================================================================
 // 9. Active Stories Endpoint (/api/v1/stories/active)
 // =========================================================================
 router.get('/api/v1/stories/active', async (req, res) => {
@@ -588,7 +737,7 @@ router.get('/api/v1/stories/active', async (req, res) => {
 // =========================================================================
 // 10. Atomic License Key Redemption (/api/v1/license/redeem)
 // =========================================================================
-router.post('/api/v1/license/redeem', verifyFirebaseAuth, async (req, res) => {
+router.post('/api/v1/license/redeem', licenseRedeemLimiter, verifyFirebaseAuth, async (req, res) => {
   const { db, admin } = getFirebaseAdmin();
   if (!db) return res.status(503).json({ success: false, error: 'Database unavailable' });
 
@@ -660,6 +809,92 @@ router.post('/api/v1/license/redeem', verifyFirebaseAuth, async (req, res) => {
     return res.status(500).json({ success: false, error: 'Internal redemption error.' });
   }
 });
+
+// =========================================================================
+// 11. Support Chat Endpoints (/api/v1/chat/messages, /api/v1/chat/send)
+// =========================================================================
+router.get('/api/v1/chat/messages', verifyFirebaseAuth, async (req, res) => {
+  const { db } = getFirebaseAdmin();
+  if (!db) return res.status(503).json({ success: false, error: 'Database unavailable' });
+
+  try {
+    const threadSnap = await db.collection('support_chats')
+      .doc(req.uid)
+      .collection('messages')
+      .orderBy('timestamp', 'asc')
+      .limit(50)
+      .get();
+
+    const messages = [];
+    threadSnap.forEach(doc => {
+      messages.push({ id: doc.id, ...doc.data() });
+    });
+
+    // If thread is empty, return initial official greeting
+    if (messages.length === 0) {
+      messages.push({
+        id: 'msg_welcome',
+        senderName: 'Escrow Desk Official',
+        text: 'Welcome to Gamervoult Official Support Desk! How can we assist you with account verification or delivery today?',
+        timestamp: new Date().toISOString(),
+        isFromStaff: true
+      });
+    }
+
+    return res.status(200).json({ success: true, count: messages.length, messages });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: 'Failed to retrieve messages.' });
+  }
+});
+
+router.post('/api/v1/chat/send', chatSendLimiter, verifyFirebaseAuth, async (req, res) => {
+  const { db } = getFirebaseAdmin();
+  if (!db) return res.status(503).json({ success: false, error: 'Database unavailable' });
+
+  const rawText = req.body?.text;
+  if (!rawText || typeof rawText !== 'string' || rawText.trim().length === 0) {
+    return res.status(400).json({ success: false, error: 'Message text cannot be empty.' });
+  }
+  if (rawText.length > 1000) {
+    return res.status(400).json({ success: false, error: 'Message exceeds maximum length of 1000 characters.' });
+  }
+
+  const cleanText = rawText.trim();
+  const nowIso = new Date().toISOString();
+  const userMsg = {
+    senderId: req.uid,
+    senderName: req.user.name || 'Player',
+    text: cleanText,
+    timestamp: nowIso,
+    isFromStaff: false
+  };
+
+  try {
+    const chatRef = db.collection('support_chats').doc(req.uid).collection('messages');
+    const docRef = await chatRef.add(userMsg);
+
+    // Auto-reply acknowledgment
+    const replyMsg = {
+      senderId: 'copilot_escrow_desk',
+      senderName: 'Escrow Copilot Specialist',
+      text: `Thank you for contacting Gamervoult Escrow Support. We logged your message: "${cleanText}". A dedicated escrow agent will monitor your account handover.`,
+      timestamp: new Date().toISOString(),
+      isFromStaff: true
+    };
+    await chatRef.add(replyMsg);
+
+    return res.status(201).json({
+      success: true,
+      messageId: docRef.id,
+      userMessage: userMsg,
+      reply: replyMsg
+    });
+  } catch (err) {
+    console.error('[Chat] Send error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to send message.' });
+  }
+});
+
 
 export default router;
 

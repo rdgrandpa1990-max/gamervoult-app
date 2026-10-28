@@ -125,3 +125,51 @@ export function requireRoles(allowedRoles) {
   };
 }
 
+// In-Memory Sliding Window Rate Limiter
+const ipRequestHistory = new Map();
+
+export function createRateLimiter(windowMs = 60000, maxRequests = 30) {
+  return (req, res, next) => {
+    const rawIp = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
+    const clientIp = String(rawIp).split(',')[0].trim();
+    const key = `${req.baseUrl || ''}${req.path}_${clientIp}`;
+    const now = Date.now();
+
+    let entry = ipRequestHistory.get(key);
+    if (!entry || now > entry.resetTime) {
+      entry = { count: 1, resetTime: now + windowMs };
+      ipRequestHistory.set(key, entry);
+    } else {
+      entry.count++;
+      if (entry.count > maxRequests) {
+        const retryAfterSec = Math.ceil((entry.resetTime - now) / 1000);
+        res.setHeader('Retry-After', String(retryAfterSec));
+        return res.status(429).json({
+          success: false,
+          error: 'RATE_LIMIT_EXCEEDED',
+          message: `Too many requests. Limit is ${maxRequests} requests per ${windowMs / 1000}s. Please retry in ${retryAfterSec}s.`
+        });
+      }
+    }
+    next();
+  };
+}
+
+// Request Payload Sanitizer & Prototype Pollution Guard
+export function validateRequestPayload(req, res, next) {
+  if (req.body && typeof req.body === 'object') {
+    const keys = Object.keys(req.body);
+    for (const key of keys) {
+      if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+        return res.status(400).json({
+          success: false,
+          error: 'BAD_REQUEST',
+          message: 'Malformed request: forbidden prototype pollution keys detected.'
+        });
+      }
+    }
+  }
+  next();
+}
+
+

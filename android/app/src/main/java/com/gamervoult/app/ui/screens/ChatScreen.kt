@@ -1,5 +1,6 @@
 package com.gamervoult.app.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -10,7 +11,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.SupportAgent
 import androidx.compose.material3.*
@@ -106,7 +107,7 @@ fun ChatScreen() {
                         Surface(
                             shape = RoundedCornerShape(16.dp),
                             color = DarkCard,
-                            border = ButtonDefaults.outlinedButtonBorder,
+                            border = BorderStroke(1.dp, DarkBorder),
                             modifier = Modifier.clickable {
                                 GamervoultRepository.sendMessage(prompt)
                             }
@@ -157,7 +158,7 @@ fun ChatScreen() {
                             .clip(CircleShape)
                             .background(PrimaryIndigo)
                     ) {
-                        Icon(Icons.Default.Send, contentDescription = "Send", tint = Color.White)
+                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send", tint = Color.White)
                     }
                 }
             }

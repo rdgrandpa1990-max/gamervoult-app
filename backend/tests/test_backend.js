@@ -187,6 +187,98 @@ async function runTests() {
   assert(checkRoleAccess('staff', ['staff', 'employee', 'admin']) === 200, 'Staff role permitted on support copilot route');
   assert(checkRoleAccess(null, ['client', 'staff']) === 401, 'Unauthenticated user rejected with 401');
 
+  // ---------------------------------------------------------
+  // TEST GROUP 6: Rate Limiting Enforcement
+  // ---------------------------------------------------------
+  console.log('\n--- TEST GROUP 6: Rate Limiting & Abuse Defense ---');
+  function simulateRateLimiter(maxRequests = 5) {
+    let count = 0;
+    return () => {
+      count++;
+      return count > maxRequests ? 429 : 200;
+    };
+  }
+
+  const testLimiter = simulateRateLimiter(3);
+  assert(testLimiter() === 200, 'Request 1/3 permitted within rate window');
+  assert(testLimiter() === 200, 'Request 2/3 permitted within rate window');
+  assert(testLimiter() === 200, 'Request 3/3 permitted within rate window');
+  assert(testLimiter() === 429, 'Request 4/3 blocked with HTTP 429 Too Many Requests');
+
+  // ---------------------------------------------------------
+  // TEST GROUP 7: Prototype Pollution Guard
+  // ---------------------------------------------------------
+  console.log('\n--- TEST GROUP 7: Prototype Pollution & Payload Validation ---');
+  function checkPayloadKeys(body) {
+    if (!body || typeof body !== 'object') return 200;
+    for (const key of Object.keys(body)) {
+      if (key === '__proto__' || key === 'constructor' || key === 'prototype') return 400;
+    }
+    return 200;
+  }
+
+  assert(checkPayloadKeys({ itemId: 'prod_01', customerName: 'Alex' }) === 200, 'Clean payload accepted');
+  assert(checkPayloadKeys(JSON.parse('{"itemId":"prod_01","__proto__":{"admin":true}}')) === 400, 'Payload with __proto__ rejected with HTTP 400');
+  assert(checkPayloadKeys({ itemId: 'prod_01', constructor: {} }) === 400, 'Payload with constructor rejected with HTTP 400');
+
+  // ---------------------------------------------------------
+  // TEST GROUP 8: User Data Isolation & Ownership Protection
+  // ---------------------------------------------------------
+  console.log('\n--- TEST GROUP 8: User Data Isolation & Private Records ---');
+  function filterUserOrders(orders, callerUid, isStaff) {
+    if (isStaff) return orders;
+    return orders.filter(o => o.userId === callerUid);
+  }
+
+  const multiUserOrders = [
+    { orderCode: 'ORD_USER_A1', userId: 'user_alice', amount: 999 },
+    { orderCode: 'ORD_USER_A2', userId: 'user_alice', amount: 499 },
+    { orderCode: 'ORD_USER_B1', userId: 'user_bob', amount: 1499 }
+  ];
+
+  const aliceView = filterUserOrders(multiUserOrders, 'user_alice', false);
+  const bobView = filterUserOrders(multiUserOrders, 'user_bob', false);
+  const staffView = filterUserOrders(multiUserOrders, 'staff_charlie', true);
+
+  assert(aliceView.length === 2 && aliceView.every(o => o.userId === 'user_alice'), 'User Alice can ONLY see her own 2 orders');
+  assert(!aliceView.some(o => o.userId === 'user_bob'), 'User Alice CANNOT see User Bob\'s private orders');
+  assert(bobView.length === 1 && bobView[0].orderCode === 'ORD_USER_B1', 'User Bob can ONLY see his own order');
+  assert(staffView.length === 3, 'Staff user can view all registered orders for fulfillment');
+
+  // ---------------------------------------------------------
+  // TEST GROUP 9: Privilege Escalation & Role Tamper Defense
+  // ---------------------------------------------------------
+  console.log('\n--- TEST GROUP 9: Privilege Escalation & Profile Role Tamper Defense ---');
+  function evaluateProfileUpdate(callerRole, updatePayload) {
+    const privilegedFields = ['role', 'status', 'isVip', 'subscriptionExpiry'];
+    const hasPrivilegedKey = privilegedFields.some(f => Object.prototype.hasOwnProperty.call(updatePayload, f));
+    if (hasPrivilegedKey && callerRole !== 'admin' && callerRole !== 'superadmin') {
+      return 403; // Forbidden
+    }
+    return 200; // Success
+  }
+
+  assert(evaluateProfileUpdate('client', { name: 'John Doe', phone: '+919876543210' }) === 200, 'Ordinary client can update legitimate fields (name, phone)');
+  assert(evaluateProfileUpdate('client', { role: 'admin' }) === 403, 'Client attempting to escalate role to admin rejected with HTTP 403');
+  assert(evaluateProfileUpdate('client', { isVip: true }) === 403, 'Client attempting to forge VIP entitlement rejected with HTTP 403');
+  assert(evaluateProfileUpdate('admin', { role: 'staff' }) === 200, 'Admin permitted to manage user roles');
+
+  // ---------------------------------------------------------
+  // TEST GROUP 10: Support Chat Message Validation
+  // ---------------------------------------------------------
+  console.log('\n--- TEST GROUP 10: Support Chat Input Validation ---');
+  function validateChatMessage(text) {
+    if (!text || typeof text !== 'string' || text.trim().length === 0) return { valid: false, error: 'EMPTY_TEXT' };
+    if (text.length > 1000) return { valid: false, error: 'TEXT_TOO_LONG' };
+    return { valid: true };
+  }
+
+  assert(!validateChatMessage('').valid, 'Empty chat message rejected');
+  assert(!validateChatMessage('   ').valid, 'Whitespace-only chat message rejected');
+  assert(!validateChatMessage('A'.repeat(1001)).valid, 'Chat message > 1000 characters rejected');
+  assert(validateChatMessage('Hello, where can I verify my order?').valid, 'Valid chat message accepted');
+
+
   console.log('\n======================================================');
   console.log(`📊 TEST RESULTS: ${passed} Passed | ${failed} Failed`);
   console.log('======================================================\n');

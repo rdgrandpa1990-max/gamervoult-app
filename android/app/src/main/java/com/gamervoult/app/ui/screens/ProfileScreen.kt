@@ -1,11 +1,14 @@
 package com.gamervoult.app.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.automirrored.filled.Help
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -294,7 +297,7 @@ fun ProfileScreen() {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     SettingRow(icon = Icons.Default.Lock, title = "Escrow Security Policy", subtitle = "Strict 48-Hour Mailbox Cooldown & Handover")
                     SettingRow(icon = Icons.Default.Policy, title = "Terms of Service", subtitle = "v2.4 Production Standard Agreement")
-                    SettingRow(icon = Icons.Default.Help, title = "Official Support Desk", subtitle = "Connect directly with our Escrow Specialist")
+                    SettingRow(icon = Icons.AutoMirrored.Filled.Help, title = "Official Support Desk", subtitle = "Connect directly with our Escrow Specialist")
                 }
             }
         }
@@ -312,11 +315,11 @@ fun ProfileScreen() {
                         Button(
                             onClick = { showLogoutDialog = true },
                             colors = ButtonDefaults.buttonColors(containerColor = AccentRed.copy(alpha = 0.15f)),
-                            border = ButtonDefaults.outlinedButtonBorder.copy(brush = androidx.compose.ui.graphics.SolidColor(AccentRed.copy(alpha = 0.5f))),
+                            border = BorderStroke(1.dp, AccentRed.copy(alpha = 0.5f)),
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Icon(Icons.Default.ExitToApp, contentDescription = null, tint = AccentRed, modifier = Modifier.size(20.dp))
+                            Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = null, tint = AccentRed, modifier = Modifier.size(20.dp))
                             Spacer(modifier = Modifier.width(10.dp))
                             Text(
                                 text = "Log Out of Gamervoult",

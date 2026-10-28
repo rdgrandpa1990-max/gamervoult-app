@@ -237,7 +237,7 @@ fun HomeScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(prod.description, color = TextSecondary, fontSize = 13.sp)
 
-                    Divider(color = DarkBorder)
+                    HorizontalDivider(color = DarkBorder)
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -257,7 +257,7 @@ fun HomeScreen(
                         }
                     }
 
-                    Divider(color = DarkBorder)
+                    HorizontalDivider(color = DarkBorder)
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
