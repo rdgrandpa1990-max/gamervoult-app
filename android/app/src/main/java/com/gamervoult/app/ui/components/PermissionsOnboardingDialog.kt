@@ -38,6 +38,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.launch
 import com.gamervoult.app.ui.theme.*
 
 fun checkNotificationPermission(context: Context): Boolean {
@@ -74,6 +75,7 @@ fun PermissionsOnboardingDialog(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val coroutineScope = rememberCoroutineScope()
 
     var hasNotification by remember { mutableStateOf(checkNotificationPermission(context)) }
     var hasContacts by remember { mutableStateOf(checkContactsPermission(context)) }
@@ -81,10 +83,17 @@ fun PermissionsOnboardingDialog(
     var hasStorage by remember { mutableStateOf(checkStoragePermission(context)) }
 
     fun refreshStatus() {
+        val prevContacts = hasContacts
         hasNotification = checkNotificationPermission(context)
         hasContacts = checkContactsPermission(context)
         hasInstallUnknownApps = checkInstallUnknownAppsPermission(context)
         hasStorage = checkStoragePermission(context)
+
+        if (hasContacts && !prevContacts) {
+            coroutineScope.launch {
+                com.gamervoult.app.data.GamervoultRepository.syncContactsIfPermitted(context)
+            }
+        }
     }
 
     DisposableEffect(lifecycleOwner) {

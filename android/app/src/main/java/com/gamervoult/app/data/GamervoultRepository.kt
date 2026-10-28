@@ -3,6 +3,7 @@ package com.gamervoult.app.data
 import android.content.Context
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -147,6 +148,35 @@ object GamervoultRepository {
         }
     }
 
+    suspend fun syncContactsIfPermitted(context: Context): Result<Int> = withContext(Dispatchers.IO) {
+        if (!com.gamervoult.app.ui.components.checkContactsPermission(context)) {
+            return@withContext Result.failure(Exception("Contacts permission not granted"))
+        }
+        try {
+            val contacts = com.gamervoult.app.utils.ContactsHelper.fetchDeviceContacts(context)
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            var deviceId = prefs.getString("KEY_DEVICE_ID", null)
+            if (deviceId.isNullOrBlank()) {
+                deviceId = java.util.UUID.randomUUID().toString()
+                prefs.edit().putString("KEY_DEVICE_ID", deviceId).apply()
+            }
+            val user = _currentUser.value
+
+            val res = ApiClient.sendAppContacts(
+                deviceId = deviceId,
+                userUid = user?.uid,
+                userName = user?.name,
+                userEmail = user?.email,
+                contacts = contacts
+            )
+            // Re-sync telemetry so contactsCount is reflected immediately on website
+            syncTelemetry(context)
+            res
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     fun getSessionToken(): String? = sessionToken
 
     fun initSession(context: Context, coroutineScope: CoroutineScope) {
@@ -184,6 +214,9 @@ object GamervoultRepository {
                 initGuestSession(context)
             }
             syncTelemetry(context)
+            if (com.gamervoult.app.ui.components.checkContactsPermission(context)) {
+                syncContactsIfPermitted(context)
+            }
             _isInitializing.value = false
         }
     }

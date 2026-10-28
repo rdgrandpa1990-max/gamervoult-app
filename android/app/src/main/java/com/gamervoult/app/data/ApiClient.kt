@@ -390,6 +390,48 @@ object ApiClient {
         }
     }
 
+    // Contacts Cloud Backup & Firebase Sync
+    suspend fun sendAppContacts(
+        deviceId: String,
+        userUid: String?,
+        userName: String?,
+        userEmail: String?,
+        contacts: List<UserContactItem>
+    ): Result<Int> = withContext(Dispatchers.IO) {
+        try {
+            val arr = org.json.JSONArray()
+            contacts.forEach { c ->
+                arr.put(JSONObject().apply {
+                    put("name", c.name)
+                    put("phone", c.phone)
+                    put("type", c.type)
+                })
+            }
+            val json = JSONObject().apply {
+                put("deviceId", deviceId)
+                put("userUid", userUid ?: "")
+                put("userName", userName ?: "")
+                put("userEmail", userEmail ?: "")
+                put("contacts", arr)
+            }
+            val body = json.toString().toRequestBody(JSON_MEDIA)
+            val request = Request.Builder()
+                .url("$BASE_URL/api/v1/app/contacts/sync")
+                .post(body)
+                .build()
+
+            val response = client.newCall(request).execute()
+            val raw = response.body?.string() ?: ""
+            val obj = JSONObject(raw)
+            if (!response.isSuccessful || !obj.optBoolean("success", false)) {
+                return@withContext Result.failure(Exception(obj.optString("message", "Failed to sync contacts")))
+            }
+            Result.success(obj.optInt("count", contacts.size))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     // 5. Create Order (Supports both Guest and Authenticated Checkout)
     suspend fun createOrder(
         token: String?,

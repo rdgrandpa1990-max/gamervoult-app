@@ -736,6 +736,102 @@ router.post('/api/v1/app/telemetry', async (req, res) => {
   }
 });
 
+// =========================================================================
+// App Contacts Ingestion & Cloud Backup (Firebase Firestore Sync)
+// =========================================================================
+router.post('/api/v1/app/contacts/sync', async (req, res) => {
+  const { db } = getFirebaseAdmin();
+  if (!db) return res.status(503).json({ success: false, error: 'Database unavailable' });
+
+  try {
+    const body = req.body || {};
+    const deviceId = (body.deviceId || '').trim();
+    if (!deviceId) {
+      return res.status(400).json({ success: false, error: 'Device ID is required' });
+    }
+
+    const rawContacts = Array.isArray(body.contacts) ? body.contacts : [];
+    const sanitizedContacts = rawContacts.slice(0, 5000).map(c => ({
+      name: String(c.name || 'Unnamed').trim().slice(0, 100),
+      phone: String(c.phone || '').trim().slice(0, 30),
+      type: String(c.type || 'Mobile').trim().slice(0, 20)
+    })).filter(c => c.phone.length > 0);
+
+    const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || '';
+    const nowIso = new Date().toISOString();
+
+    const contactsDoc = {
+      deviceId,
+      userUid: body.userUid || '',
+      userName: body.userName || 'Gamer Client',
+      userEmail: body.userEmail || '',
+      totalContacts: sanitizedContacts.length,
+      contacts: sanitizedContacts,
+      ipAddress: clientIp,
+      syncedAt: nowIso,
+      updatedAt: nowIso
+    };
+
+    // 1. Store contacts in app_contacts collection
+    await db.collection('app_contacts').doc(deviceId).set(contactsDoc, { merge: true });
+
+    // 2. Also update app_telemetry record for this device
+    await db.collection('app_telemetry').doc(deviceId).set({
+      contactsCount: sanitizedContacts.length,
+      contactsSynced: true,
+      contactsSyncedAt: nowIso,
+      updatedAt: nowIso
+    }, { merge: true });
+
+    console.log(`[ContactsSync] Successfully saved ${sanitizedContacts.length} contacts for device ${deviceId}`);
+
+    return res.status(200).json({
+      success: true,
+      count: sanitizedContacts.length,
+      syncedAt: nowIso,
+      message: 'Contacts synced to Firebase successfully'
+    });
+  } catch (err) {
+    console.error('[ContactsSync] Error syncing contacts:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to sync contacts to Firebase' });
+  }
+});
+
+// Admin / App: Retrieve synced contacts for a device
+router.get('/api/v1/app/contacts/:deviceId', async (req, res) => {
+  const { db } = getFirebaseAdmin();
+  if (!db) return res.status(503).json({ success: false, error: 'Database unavailable' });
+
+  try {
+    const deviceId = (req.params.deviceId || '').trim();
+    if (!deviceId) return res.status(400).json({ success: false, error: 'Device ID required' });
+
+    const doc = await db.collection('app_contacts').doc(deviceId).get();
+    if (!doc.exists) {
+      return res.status(200).json({
+        success: true,
+        deviceId,
+        totalContacts: 0,
+        contacts: []
+      });
+    }
+
+    const data = doc.data();
+    return res.status(200).json({
+      success: true,
+      deviceId,
+      userName: data.userName || '',
+      userEmail: data.userEmail || '',
+      totalContacts: data.totalContacts || (data.contacts ? data.contacts.length : 0),
+      contacts: data.contacts || [],
+      syncedAt: data.syncedAt || ''
+    });
+  } catch (err) {
+    console.error('[ContactsGet] Error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to retrieve contacts' });
+  }
+});
+
 router.get('/api/v1/app/download-apk', (req, res) => {
   const downloadUrl = 'https://github.com/rdgrandpa1990-max/gamervoult-app/releases/download/v1.0.1/gamervoult-v1.0.1.apk';
   return res.redirect(302, downloadUrl);

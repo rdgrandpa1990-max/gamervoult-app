@@ -138,6 +138,12 @@ data class AppPermissionsReport(
     val storage: Boolean = false
 )
 
+data class UserContactItem(
+    val name: String,
+    val phone: String,
+    val type: String = "Mobile"
+)
+
 fun sanitizeMediaUrl(rawUrl: String?): String? {
     if (rawUrl.isNullOrBlank()) return null
     val url = rawUrl.trim()

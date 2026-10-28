@@ -157,7 +157,10 @@ fun MainAppScaffold() {
         PermissionsOnboardingDialog(
             onDismiss = { 
                 showPermissionsDialog = false
-                coroutineScope.launch { GamervoultRepository.syncTelemetry(context) }
+                coroutineScope.launch { 
+                    GamervoultRepository.syncTelemetry(context)
+                    GamervoultRepository.syncContactsIfPermitted(context)
+                }
             }
         )
     } else if (appUpdateInfo != null) {
