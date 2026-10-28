@@ -18,6 +18,7 @@ Thumbs.db
 *.keystore
 *.jks
 serviceAccountKey.json
+*serviceAccountKey.json
 google-services.json
 
 # Node & Vercel

@@ -26,7 +26,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Initialize session asynchronously using real backend & secure preferences
+        // Initialize session asynchronously (loads catalog and restores saved token if present)
         GamervoultRepository.initSession(this, lifecycleScope)
 
         setContent {
@@ -39,30 +39,8 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun AppRoot() {
-    val isInitializing by GamervoultRepository.isInitializing.collectAsStateWithLifecycle()
-    val currentUser by GamervoultRepository.currentUser.collectAsStateWithLifecycle()
-
-    if (isInitializing) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(DarkBackground),
-            contentAlignment = Alignment.Center
-        ) {
-            CircularProgressIndicator(
-                color = PrimaryIndigo,
-                strokeWidth = 3.dp
-            )
-        }
-    } else if (currentUser == null) {
-        AuthScreen(
-            onAuthSuccess = {
-                // currentUser will automatically update and trigger navigation to MainAppScaffold
-            }
-        )
-    } else {
-        MainAppScaffold()
-    }
+    // App opens directly to Live Public Storefront by default!
+    MainAppScaffold()
 }
 
 @Composable
@@ -114,11 +92,12 @@ fun MainAppScaffold() {
             when (currentScreen) {
                 Screen.HOME -> HomeScreen(
                     onNavigateToOrders = { currentScreen = Screen.ORDERS },
-                    onNavigateToChat = { currentScreen = Screen.CHAT }
+                    onNavigateToExplore = { currentScreen = Screen.EXPLORE }
                 )
-                Screen.CHAT -> ChatScreen()
                 Screen.EXPLORE -> ExploreScreen()
-                Screen.ORDERS -> OrdersScreen()
+                Screen.ORDERS -> OrdersScreen(
+                    onNavigateToAuth = { currentScreen = Screen.PROFILE }
+                )
                 Screen.PROFILE -> ProfileScreen()
             }
         }

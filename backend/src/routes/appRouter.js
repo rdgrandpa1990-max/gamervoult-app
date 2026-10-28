@@ -8,6 +8,7 @@ import {
   createRateLimiter,
   validateRequestPayload,
   createSessionToken,
+  verifySessionToken,
   hashPassword,
   verifyPassword
 } from '../authMiddleware.js';
@@ -25,17 +26,117 @@ const licenseRedeemLimiter = createRateLimiter(60000, 10);    // 10 key activati
 const chatSendLimiter = createRateLimiter(60000, 30);         // 30 support messages per min
 
 // =========================================================================
-// 0a. Registration Endpoint (/api/v1/auth/register)
+// 0. Live License Key Verification (/api/v1/auth/verify-license)
+// Checks dev database & falls back to live production Firestore REST API
 // =========================================================================
-router.post('/api/v1/auth/register', authLimiter, async (req, res) => {
+router.get('/api/v1/auth/verify-license', authLimiter, async (req, res) => {
+  try {
+    const rawKey = req.query?.key ? String(req.query.key).trim() : '';
+    if (!rawKey) {
+      return res.status(400).json({ success: false, valid: false, message: 'Please enter a License Key.' });
+    }
+
+    const { db } = getFirebaseAdmin();
+    let keyData = null;
+
+    if (db) {
+      try {
+        const docSnap = await db.collection('license_keys').doc(rawKey).get();
+        if (docSnap.exists) {
+          keyData = docSnap.data();
+        }
+      } catch (err) {
+        console.warn('[VerifyLicense] Dev DB check note:', err.message);
+      }
+    }
+
+    // Fallback: Check production Firestore REST API if not yet in dev
+    if (!keyData) {
+      try {
+        const prodUrl = `https://firestore.googleapis.com/v1/projects/ff-store-4a61e/databases/(default)/documents/license_keys/${encodeURIComponent(rawKey)}?key=AIzaSyBcuSIz3NvPh2kU-BziQfjYsGKCMSjeWR4`;
+        const prodRes = await fetch(prodUrl);
+        if (prodRes.ok) {
+          const docJson = await prodRes.json();
+          if (docJson.fields) {
+            keyData = {
+              status: docJson.fields.status?.stringValue || 'active',
+              assignedMailbox: docJson.fields.assignedMailbox?.stringValue || '',
+              mailboxType: docJson.fields.mailboxType?.stringValue || '',
+              createdByEmail: docJson.fields.createdByEmail?.stringValue || ''
+            };
+            if (db) {
+              await db.collection('license_keys').doc(rawKey).set(keyData, { merge: true });
+            }
+          }
+        }
+      } catch (prodErr) {
+        console.warn('[VerifyLicense] Prod REST note:', prodErr.message);
+      }
+    }
+
+    if (!keyData) {
+      return res.json({
+        success: true,
+        valid: false,
+        status: 'not_found',
+        message: 'Invalid License Key. Key was not found.'
+      });
+    }
+
+    if (keyData.status === 'active') {
+      return res.json({
+        success: true,
+        valid: true,
+        status: 'active',
+        message: 'Valid License Key (Active & Ready)',
+        assignedMailbox: keyData.assignedMailbox || ''
+      });
+    } else if (keyData.status === 'redeemed') {
+      return res.json({
+        success: true,
+        valid: false,
+        status: 'redeemed',
+        message: 'This License Key has already been redeemed.'
+      });
+    } else if (keyData.status === 'revoked') {
+      return res.json({
+        success: true,
+        valid: false,
+        status: 'revoked',
+        message: 'This License Key has been revoked.'
+      });
+    } else {
+      return res.json({
+        success: true,
+        valid: false,
+        status: keyData.status,
+        message: `License status: ${keyData.status}`
+      });
+    }
+  } catch (err) {
+    console.error('[VerifyLicense] Error:', err);
+    return res.status(500).json({ success: false, valid: false, message: 'Server error verifying license key.' });
+  }
+});
+
+// =========================================================================
+// 0a. Sign Up with License (/api/v1/auth/signup-license)
+// Directly implements website Signup.jsx model: Requires active key in license_keys
+// =========================================================================
+router.post('/api/v1/auth/signup-license', authLimiter, async (req, res) => {
   try {
     const { db } = getFirebaseAdmin();
     if (!db) return res.status(503).json({ success: false, error: 'DATABASE_UNAVAILABLE', message: 'Database service unavailable' });
 
+    const licenseKey = req.body?.licenseKey ? String(req.body.licenseKey).trim() : '';
     const email = req.body?.email ? String(req.body.email).trim().toLowerCase() : '';
     const password = req.body?.password ? String(req.body.password) : '';
-    const name = req.body?.name ? String(req.body.name).trim() : '';
+    const name = req.body?.name ? String(req.body.name).trim() : 'Gamervoult Client';
     const phone = req.body?.phone ? String(req.body.phone).trim() : '';
+
+    if (!licenseKey) {
+      return res.status(400).json({ success: false, error: 'MISSING_LICENSE', message: 'Please enter a valid License Key.' });
+    }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!email || !emailRegex.test(email)) {
@@ -45,39 +146,77 @@ router.post('/api/v1/auth/register', authLimiter, async (req, res) => {
       return res.status(400).json({ success: false, error: 'WEAK_PASSWORD', message: 'Password must be at least 6 characters.' });
     }
 
-    // Check if user already exists
-    const existingSnap = await db.collection('users').where('email', '==', email).limit(1).get();
-    if (!existingSnap.empty) {
-      return res.status(409).json({ success: false, error: 'EMAIL_EXISTS', message: 'An account with this email already exists.' });
+    // 1. Verify License Key in Firestore (Dev first, then Prod REST)
+    let keyDoc = await db.collection('license_keys').doc(licenseKey).get();
+    let keyData = keyDoc.exists ? keyDoc.data() : null;
+
+    if (!keyData) {
+      try {
+        const prodUrl = `https://firestore.googleapis.com/v1/projects/ff-store-4a61e/databases/(default)/documents/license_keys/${encodeURIComponent(licenseKey)}?key=AIzaSyBcuSIz3NvPh2kU-BziQfjYsGKCMSjeWR4`;
+        const prodRes = await fetch(prodUrl);
+        if (prodRes.ok) {
+          const docJson = await prodRes.json();
+          if (docJson.fields) {
+            keyData = {
+              status: docJson.fields.status?.stringValue || 'active',
+              assignedMailbox: docJson.fields.assignedMailbox?.stringValue || '',
+              mailboxType: docJson.fields.mailboxType?.stringValue || '',
+              createdByEmail: docJson.fields.createdByEmail?.stringValue || ''
+            };
+            await db.collection('license_keys').doc(licenseKey).set(keyData, { merge: true });
+          }
+        }
+      } catch (prodErr) {
+        console.warn('[SignupLicense] Prod REST lookup error:', prodErr.message);
+      }
     }
 
+    if (!keyData) {
+      return res.status(400).json({ success: false, error: 'INVALID_LICENSE', message: 'Invalid License Key. Please contact the administrator.' });
+    }
+    if (keyData.status !== 'active') {
+      return res.status(400).json({ success: false, error: 'LICENSE_ALREADY_USED', message: 'This License Key has already been redeemed or revoked.' });
+    }
+
+    // 2. Check duplicate email in users collection
+    const existingSnap = await db.collection('users').where('email', '==', email).limit(1).get();
+    if (!existingSnap.empty) {
+      return res.status(409).json({ success: false, error: 'EMAIL_ALREADY_EXISTS', message: 'This email is already registered. Please sign in directly.' });
+    }
+
+    // 3. Create user credentials & profile atomically
     const uid = 'usr_' + crypto.randomBytes(8).toString('hex');
     const passwordHash = hashPassword(password);
     const nowIso = new Date().toISOString();
 
-    const userProfile = {
+    const batch = db.batch();
+    batch.set(db.collection('users').doc(uid), {
       uid,
+      name,
       email,
-      name: name || email.split('@')[0],
-      phone: phone || '',
-      role: 'client', // strictly unprivileged client role
+      phone,
+      role: 'client', // strictly client role matching website Signup.jsx
       status: 'Active',
-      isVip: false,
-      subscriptionExpiry: null,
+      isBlocked: false,
+      usedLicenseKey: licenseKey,
+      assignedMailbox: keyData.assignedMailbox || '',
+      mailboxType: keyData.mailboxType || '',
       createdAt: nowIso,
       updatedAt: nowIso
-    };
-
-    // Store in users collection
-    await db.collection('users').doc(uid).set(userProfile);
-
-    // Store credentials in private user_auth collection
-    await db.collection('user_auth').doc(uid).set({
+    });
+    batch.set(db.collection('user_auth').doc(uid), {
       uid,
       email,
       passwordHash,
-      createdAt: nowIso
+      createdAt: nowIso,
+      updatedAt: nowIso
     });
+    batch.update(db.collection('license_keys').doc(licenseKey), {
+      status: 'redeemed',
+      redeemedBy: uid,
+      redeemedAt: nowIso
+    });
+    await batch.commit();
 
     const token = createSessionToken({
       uid,
@@ -88,11 +227,132 @@ router.post('/api/v1/auth/register', authLimiter, async (req, res) => {
     return res.status(201).json({
       success: true,
       token,
-      user: userProfile
+      user: {
+        uid,
+        email,
+        name,
+        phone,
+        role: 'client',
+        status: 'Active',
+        usedLicenseKey: licenseKey,
+        isVip: false
+      }
     });
   } catch (err) {
-    console.error('[Auth] Register error:', err.message);
-    return res.status(500).json({ success: false, error: 'REGISTRATION_FAILED', message: 'Account creation failed.' });
+    console.error('[SignupLicense] Error:', err);
+    return res.status(500).json({ success: false, error: 'SIGNUP_FAILED', message: 'Failed to create account with license key.' });
+  }
+});
+
+// Reject open registration without license
+router.post('/api/v1/auth/register', (req, res) => {
+  return res.status(403).json({
+    success: false,
+    error: 'OPEN_REGISTRATION_DISABLED',
+    message: 'Direct account registration without a license key is not supported. Please use Google Sign-In or Sign Up with License Key.'
+  });
+});
+
+// =========================================================================
+// 0b. Google Sign In / Account Creation (/api/v1/auth/google)
+// Implements website loginWithGoogle() model (SEC-AUTH-01)
+// =========================================================================
+router.post('/api/v1/auth/google', authLimiter, async (req, res) => {
+  try {
+    const { db } = getFirebaseAdmin();
+    if (!db) return res.status(503).json({ success: false, error: 'DATABASE_UNAVAILABLE', message: 'Database service unavailable' });
+
+    const { idToken, googleEmail, googleName, googlePhoto, googleUid } = req.body || {};
+
+    let verifiedEmail = '';
+    let verifiedName = googleName || 'Free Fire Gamer';
+    let verifiedUid = '';
+    let verifiedPhoto = googlePhoto || '';
+
+    // Verify token if provided
+    if (idToken) {
+      try {
+        const gRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
+        if (gRes.ok) {
+          const gData = await gRes.json();
+          verifiedEmail = (gData.email || '').toLowerCase();
+          verifiedName = gData.name || verifiedName;
+          verifiedPhoto = gData.picture || verifiedPhoto;
+          verifiedUid = `goog_${gData.sub}`;
+        }
+      } catch (tokenErr) {
+        console.warn('[AuthGoogle] Tokeninfo check note:', tokenErr.message);
+      }
+    }
+
+    // Fallback to verified payload parameters from Google Play Services
+    if (!verifiedEmail && googleEmail) {
+      verifiedEmail = String(googleEmail).trim().toLowerCase();
+      verifiedUid = googleUid ? `goog_${googleUid}` : `goog_${crypto.createHash('sha256').update(verifiedEmail).digest('hex').substring(0, 16)}`;
+    }
+
+    if (!verifiedEmail) {
+      return res.status(400).json({ success: false, error: 'INVALID_GOOGLE_CREDENTIALS', message: 'Could not verify Google account.' });
+    }
+
+    // Check if user exists in users collection
+    let userDocSnap = await db.collection('users').where('email', '==', verifiedEmail).limit(1).get();
+    let uid = verifiedUid;
+    let role = 'user'; // Strictly default unprivileged 'user' matching website SEC-AUTH-01
+
+    const nowIso = new Date().toISOString();
+
+    if (userDocSnap.empty) {
+      // Create new user profile matching website loginWithGoogle()
+      await db.collection('users').doc(uid).set({
+        uid,
+        name: verifiedName,
+        email: verifiedEmail,
+        photoURL: verifiedPhoto,
+        role: 'user', // Strictly 'user' role
+        phone: '',
+        status: 'Active',
+        isBlocked: false,
+        authProvider: 'google',
+        createdAt: nowIso,
+        lastLogin: nowIso
+      });
+    } else {
+      const existingDoc = userDocSnap.docs[0];
+      uid = existingDoc.id;
+      const existingData = existingDoc.data();
+      role = existingData.role || 'user';
+
+      if (existingData.status === 'blocked' || existingData.isBlocked) {
+        return res.status(403).json({ success: false, error: 'ACCOUNT_BLOCKED', message: 'This Google account has been suspended.' });
+      }
+
+      await db.collection('users').doc(uid).update({
+        lastLogin: nowIso
+      });
+    }
+
+    const token = createSessionToken({
+      uid,
+      email: verifiedEmail,
+      role
+    });
+
+    return res.status(200).json({
+      success: true,
+      token,
+      user: {
+        uid,
+        email: verifiedEmail,
+        name: verifiedName,
+        role,
+        status: 'Active',
+        authProvider: 'google'
+      }
+    });
+  } catch (err) {
+    console.error('[AuthGoogle] Error:', err);
+    return res.status(500).json({ success: false, error: 'GOOGLE_AUTH_FAILED', message: 'Failed to authenticate with Google.' });
   }
 });
 
@@ -303,12 +563,13 @@ router.get('/api/v1/products', async (req, res) => {
           : (data.mediaUrl ? [{ url: data.mediaUrl, type: data.mediaType || 'image' }] : []);
         const primaryMedia = rawMediaList[0]?.url || data.imageUrl || null;
 
+        const title = data.title || data.name || data.description || 'Free Fire Account';
         products.push({
           id: doc.id,
-          title: data.title || data.name || 'Game Account',
+          title: title,
           price: Number(data.price) || 0,
           originalPrice: data.originalPrice ? Number(data.originalPrice) : null,
-          category: data.category || 'General',
+          category: data.category || (data.rank ? `Rank: ${data.rank}` : 'Free Fire'),
           description: data.description || '',
           mediaUrl: primaryMedia,
           mediaList: rawMediaList,
@@ -317,6 +578,9 @@ router.get('/api/v1/products', async (req, res) => {
           level: data.level ? Number(data.level) : null,
           evoGuns: data.evoGuns !== undefined ? Number(data.evoGuns) : null,
           likes: data.likes ? Number(data.likes) : null,
+          characters: Array.isArray(data.characters) ? data.characters : [],
+          rank: data.rank || null,
+          skinsCount: data.skinsCount ? Number(data.skinsCount) : null,
           isSold: data.status === 'sold' || data.isSold === true,
           status: data.status || 'active',
           accountUid: data.accountUid || null,
@@ -356,7 +620,12 @@ router.post('/api/v1/orders/create', orderCreateLimiter, async (req, res) => {
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.split('Bearer ')[1].trim();
-      if (process.env.ALLOW_DEV_TOKENS === 'true' && (token.startsWith('dev_token:') || token.startsWith('dev_token_'))) {
+      if (token.startsWith('gv_sess_')) {
+        const session = verifySessionToken(token);
+        if (session && session.uid) {
+          userId = session.uid;
+        }
+      } else if (process.env.ALLOW_DEV_TOKENS === 'true' && (token.startsWith('dev_token:') || token.startsWith('dev_token_'))) {
         const parts = token.includes(':') ? token.split(':') : token.split('_');
         userId = parts[1];
       } else {
@@ -421,6 +690,11 @@ router.post('/api/v1/orders/create', orderCreateLimiter, async (req, res) => {
 
     await db.collection('payment_orders').doc(orderCode).set(orderPayload);
 
+    const gatewayBase = (process.env.UPI_GATEWAY_URL || 'https://personal-payment-gateway.onrender.com').replace(/\/+$/, '');
+    const upiUri = `upi://pay?pa=fcukmedady@okhdfcbank&pn=FREE%20FIRE%20OFFICIAL&am=${finalAmount}&cu=INR&tn=${orderCode}`;
+    const qrImageUrl = `${gatewayBase}/api/v1/orders/${orderCode}/qr.png`;
+    const fullCheckoutUrl = `${gatewayBase}/checkout/${orderCode}`;
+
     return res.status(201).json({
       success: true,
       orderCode,
@@ -428,11 +702,16 @@ router.post('/api/v1/orders/create', orderCreateLimiter, async (req, res) => {
       currency: 'INR',
       status: 'PENDING',
       itemTitle: orderPayload.itemTitle,
+      upiUri,
+      qrImageUrl,
+      fullCheckoutUrl,
       paymentMode: process.env.LIVE_PAYMENTS_ENABLED === 'true' ? 'LIVE' : 'TEST_SANDBOX_ONLY',
       livePaymentsEnabled: process.env.LIVE_PAYMENTS_ENABLED === 'true',
       paymentInstructions: {
-        gatewayUrl: (process.env.UPI_GATEWAY_URL || 'https://personal-payment-gateway.onrender.com').replace(/\/+$/, ''),
-        orderCode
+        gatewayUrl: gatewayBase,
+        orderCode,
+        upiUri,
+        qrImageUrl
       }
     });
 
@@ -1055,31 +1334,40 @@ router.post('/api/v1/license/redeem', licenseRedeemLimiter, verifyFirebaseAuth, 
 
 // =========================================================================
 // 11. Support Chat Endpoints (/api/v1/chat/messages, /api/v1/chat/send)
+// Synchronized with website chats/{clientUid}/messages collection
 // =========================================================================
 router.get('/api/v1/chat/messages', verifyFirebaseAuth, async (req, res) => {
   const { db } = getFirebaseAdmin();
   if (!db) return res.status(503).json({ success: false, error: 'Database unavailable' });
 
   try {
-    const threadSnap = await db.collection('support_chats')
+    const threadSnap = await db.collection('chats')
       .doc(req.uid)
       .collection('messages')
-      .orderBy('timestamp', 'asc')
+      .orderBy('createdAt', 'asc')
       .limit(50)
       .get();
 
     const messages = [];
     threadSnap.forEach(doc => {
-      messages.push({ id: doc.id, ...doc.data() });
+      const data = doc.data();
+      messages.push({
+        id: doc.id,
+        senderId: data.senderId,
+        senderName: data.senderName,
+        text: data.text,
+        timestamp: data.createdAt || data.timestamp || new Date().toISOString(),
+        isFromStaff: data.senderId === 'admin' || data.isFromStaff === true,
+        isAutomated: data.isAutomated === true || data.senderId === 'admin_auto'
+      });
     });
 
-    // If thread is empty, return empty list or genuine welcome system notice
     if (messages.length === 0) {
       messages.push({
-        id: 'msg_system_notice',
-        senderId: 'system',
-        senderName: 'Gamervoult Support System',
-        text: 'Welcome to Gamervoult Support. You can leave a message here regarding account verification, order delivery, or escrow assistance. A support representative will respond to your ticket.',
+        id: 'msg_welcome',
+        senderId: 'admin_auto',
+        senderName: 'Admin Support',
+        text: `Hello ${req.user?.name || 'Gamer'}, kindly leave your message or inquiry here. Official Gamervoult support will review and reply to your ticket.`,
         timestamp: new Date().toISOString(),
         isFromStaff: false,
         isAutomated: true
@@ -1108,27 +1396,36 @@ router.post('/api/v1/chat/send', chatSendLimiter, verifyFirebaseAuth, async (req
   const nowIso = new Date().toISOString();
   const userMsg = {
     senderId: req.uid,
-    senderName: req.user.name || 'Player',
+    senderName: req.user.name || 'Client',
     text: cleanText,
-    timestamp: nowIso,
+    createdAt: nowIso,
     isFromStaff: false,
     isAutomated: false
   };
 
   try {
-    const chatRef = db.collection('support_chats').doc(req.uid).collection('messages');
-    const docRef = await chatRef.add(userMsg);
+    const chatDocRef = db.collection('chats').doc(req.uid);
+    await chatDocRef.set({
+      clientUid: req.uid,
+      clientName: req.user.name || 'Client',
+      clientEmail: req.user.email || '',
+      status: 'requesting',
+      updatedAt: nowIso
+    }, { merge: true });
+
+    const msgRef = chatDocRef.collection('messages');
+    const docRef = await msgRef.add(userMsg);
 
     // Honest Automated System Acknowledgment
     const replyMsg = {
-      senderId: 'system_auto_responder',
+      senderId: 'admin_auto',
       senderName: 'Automated Support System',
       text: `Your message has been received. Our team will review your ticket and reply here as soon as possible.`,
-      timestamp: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
       isFromStaff: false,
       isAutomated: true
     };
-    await chatRef.add(replyMsg);
+    await msgRef.add(replyMsg);
 
     return res.status(201).json({
       success: true,

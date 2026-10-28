@@ -13,6 +13,10 @@ data class ProductItem(
     val level: Int? = null,
     val evoGuns: Int? = null,
     val likes: Int? = null,
+    val rank: String? = null,
+    val characters: List<String> = emptyList(),
+    val skinsCount: Int? = null,
+    val accountUid: String? = null,
     val isSold: Boolean = false,
     val deliveryMode: String = "contact_seller"
 )
@@ -35,7 +39,26 @@ data class OrderItem(
     val createdAt: String,
     val paidAt: String? = null,
     val utr: String? = null,
+    val upiUri: String? = null,
+    val qrImageUrl: String? = null,
     val credentials: DeliveryCredentials? = null
+)
+
+data class OrderCreateResult(
+    val orderCode: String,
+    val amount: Int,
+    val status: String,
+    val itemTitle: String,
+    val upiUri: String? = null,
+    val qrImageUrl: String? = null,
+    val fullCheckoutUrl: String? = null
+)
+
+data class LicenseVerifyResult(
+    val valid: Boolean,
+    val status: String,
+    val message: String,
+    val assignedMailbox: String? = null
 )
 
 data class ChatMessage(
@@ -53,10 +76,12 @@ data class UserProfile(
     val email: String,
     val name: String,
     val phone: String? = null,
-    val role: String = "client", // client, staff, admin, superadmin
+    val role: String = "client", // client, user, staff, admin, superadmin
     val status: String = "Active",
     val isVip: Boolean = false,
-    val subscriptionExpiry: String? = null
+    val subscriptionExpiry: String? = null,
+    val authProvider: String? = null,
+    val usedLicenseKey: String? = null
 )
 
 data class AppVersionInfo(

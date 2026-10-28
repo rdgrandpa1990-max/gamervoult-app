@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit
 
 object ApiClient {
 
-    private const val BASE_URL = "https://gamervoult-backend-8o8424d3a-fcukmedady.vercel.app"
+    private const val BASE_URL = "https://gamervoult-backend.vercel.app"
     private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
 
     private val client = OkHttpClient.Builder()
@@ -21,23 +21,53 @@ object ApiClient {
         .writeTimeout(20, TimeUnit.SECONDS)
         .build()
 
-    // 1. User Registration
-    suspend fun register(
-        email: String,
-        pass: String,
+    // 0. Live License Key Verification
+    suspend fun verifyLicenseKey(key: String): Result<LicenseVerifyResult> = withContext(Dispatchers.IO) {
+        try {
+            val cleanKey = key.trim()
+            if (cleanKey.isBlank()) {
+                return@withContext Result.failure(Exception("Please enter a license key."))
+            }
+            val encodedKey = java.net.URLEncoder.encode(cleanKey, "UTF-8")
+            val request = Request.Builder()
+                .url("$BASE_URL/api/v1/auth/verify-license?key=$encodedKey")
+                .get()
+                .build()
+
+            val response = client.newCall(request).execute()
+            val raw = response.body?.string() ?: ""
+            val obj = JSONObject(raw)
+
+            val valid = obj.optBoolean("valid", false)
+            val status = obj.optString("status", if (valid) "active" else "invalid")
+            val message = obj.optString("message", if (valid) "Valid License Key (Active & Ready)" else "Invalid License Key")
+            val assignedMailbox = if (obj.has("assignedMailbox") && !obj.isNull("assignedMailbox")) obj.getString("assignedMailbox") else null
+
+            Result.success(LicenseVerifyResult(valid, status, message, assignedMailbox))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // 1. Sign Up with License Key (Matches website Signup.jsx)
+    suspend fun signUpWithLicense(
+        licenseKey: String,
         name: String,
-        phone: String
+        phone: String,
+        email: String,
+        pass: String
     ): Result<Pair<String, UserProfile>> = withContext(Dispatchers.IO) {
         try {
             val json = JSONObject().apply {
-                put("email", email.trim().lowercase())
-                put("password", pass)
+                put("licenseKey", licenseKey.trim())
                 put("name", name.trim())
                 put("phone", phone.trim())
+                put("email", email.trim().lowercase())
+                put("password", pass)
             }
             val body = json.toString().toRequestBody(JSON_MEDIA)
             val request = Request.Builder()
-                .url("$BASE_URL/api/v1/auth/register")
+                .url("$BASE_URL/api/v1/auth/signup-license")
                 .post(body)
                 .build()
 
@@ -47,6 +77,44 @@ object ApiClient {
 
             if (!response.isSuccessful || !obj.optBoolean("success", false)) {
                 val errMsg = obj.optString("message", obj.optString("error", "Registration failed"))
+                return@withContext Result.failure(Exception(errMsg))
+            }
+
+            val token = obj.getString("token")
+            val userObj = obj.getJSONObject("user")
+            val profile = parseUserProfile(userObj)
+            Result.success(Pair(token, profile))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // 1b. Google Sign In / Account Creation (Matches website loginWithGoogle)
+    suspend fun loginWithGoogle(
+        email: String,
+        name: String,
+        idToken: String? = null,
+        photoUrl: String? = null
+    ): Result<Pair<String, UserProfile>> = withContext(Dispatchers.IO) {
+        try {
+            val json = JSONObject().apply {
+                put("googleEmail", email.trim().lowercase())
+                put("googleName", name.trim())
+                if (idToken != null) put("idToken", idToken)
+                if (photoUrl != null) put("googlePhoto", photoUrl)
+            }
+            val body = json.toString().toRequestBody(JSON_MEDIA)
+            val request = Request.Builder()
+                .url("$BASE_URL/api/v1/auth/google")
+                .post(body)
+                .build()
+
+            val response = client.newCall(request).execute()
+            val raw = response.body?.string() ?: ""
+            val obj = JSONObject(raw)
+
+            if (!response.isSuccessful || !obj.optBoolean("success", false)) {
+                val errMsg = obj.optString("message", obj.optString("error", "Google authentication failed"))
                 return@withContext Result.failure(Exception(errMsg))
             }
 
@@ -142,6 +210,18 @@ object ApiClient {
                     }
                 }
 
+                val charsList = mutableListOf<String>()
+                val charsArr = p.optJSONArray("characters")
+                if (charsArr != null) {
+                    for (j in 0 until charsArr.length()) {
+                        charsList.add(charsArr.getString(j))
+                    }
+                }
+
+                val rawMedia = if (p.has("mediaUrl") && !p.isNull("mediaUrl")) p.getString("mediaUrl") else null
+                val finalMedia = rawMedia ?: imagesList.firstOrNull()
+                val acctUid = if (p.has("accountUid") && !p.isNull("accountUid")) p.getString("accountUid") else (if (p.has("gameUid") && !p.isNull("gameUid")) p.getString("gameUid") else null)
+
                 list.add(
                     ProductItem(
                         id = p.getString("id"),
@@ -150,12 +230,16 @@ object ApiClient {
                         originalPrice = if (p.has("originalPrice") && !p.isNull("originalPrice")) p.getInt("originalPrice") else null,
                         category = p.optString("category", "General"),
                         description = p.optString("description", ""),
-                        mediaUrl = if (p.has("mediaUrl") && !p.isNull("mediaUrl")) p.getString("mediaUrl") else null,
+                        mediaUrl = finalMedia,
                         images = imagesList,
                         badge = if (p.has("badge") && !p.isNull("badge")) p.getString("badge") else null,
                         level = if (p.has("level") && !p.isNull("level")) p.getInt("level") else null,
                         evoGuns = if (p.has("evoGuns") && !p.isNull("evoGuns")) p.getInt("evoGuns") else null,
                         likes = if (p.has("likes") && !p.isNull("likes")) p.getInt("likes") else null,
+                        rank = if (p.has("rank") && !p.isNull("rank")) p.getString("rank") else null,
+                        characters = charsList,
+                        skinsCount = if (p.has("skinsCount") && !p.isNull("skinsCount")) p.getInt("skinsCount") else null,
+                        accountUid = acctUid,
                         isSold = p.optBoolean("isSold", false),
                         deliveryMode = p.optString("deliveryMode", "contact_seller")
                     )
@@ -167,9 +251,9 @@ object ApiClient {
         }
     }
 
-    // 5. Create Order
+    // 5. Create Order (Supports both Guest and Authenticated Checkout)
     suspend fun createOrder(
-        token: String,
+        token: String?,
         itemId: String,
         customerName: String,
         customerEmail: String,
@@ -178,18 +262,20 @@ object ApiClient {
         try {
             val json = JSONObject().apply {
                 put("itemId", itemId)
-                put("customerName", customerName)
+                put("customerName", customerName.ifBlank { "Guest Buyer" })
                 put("customerEmail", customerEmail)
                 put("customerMobile", customerMobile)
             }
             val body = json.toString().toRequestBody(JSON_MEDIA)
-            val request = Request.Builder()
+            val builder = Request.Builder()
                 .url("$BASE_URL/api/v1/orders/create")
-                .header("Authorization", "Bearer $token")
                 .post(body)
-                .build()
 
-            val response = client.newCall(request).execute()
+            if (!token.isNullOrBlank()) {
+                builder.header("Authorization", "Bearer $token")
+            }
+
+            val response = client.newCall(builder.build()).execute()
             val raw = response.body?.string() ?: ""
             val obj = JSONObject(raw)
 
@@ -204,7 +290,9 @@ object ApiClient {
                 itemTitle = obj.optString("itemTitle", "Game Account"),
                 amount = obj.getInt("amount"),
                 status = obj.optString("status", "PENDING"),
-                createdAt = "Just now"
+                createdAt = "Just now",
+                upiUri = if (obj.has("upiUri") && !obj.isNull("upiUri")) obj.getString("upiUri") else null,
+                qrImageUrl = if (obj.has("qrImageUrl") && !obj.isNull("qrImageUrl")) obj.getString("qrImageUrl") else null
             )
             Result.success(orderItem)
         } catch (e: Exception) {
@@ -418,7 +506,9 @@ object ApiClient {
             role = obj.optString("role", "client"),
             status = obj.optString("status", "Active"),
             isVip = obj.optBoolean("isVip", false),
-            subscriptionExpiry = if (obj.has("subscriptionExpiry") && !obj.isNull("subscriptionExpiry")) obj.getString("subscriptionExpiry") else null
+            subscriptionExpiry = if (obj.has("subscriptionExpiry") && !obj.isNull("subscriptionExpiry")) obj.getString("subscriptionExpiry") else null,
+            authProvider = if (obj.has("authProvider") && !obj.isNull("authProvider")) obj.getString("authProvider") else null,
+            usedLicenseKey = if (obj.has("usedLicenseKey") && !obj.isNull("usedLicenseKey")) obj.getString("usedLicenseKey") else null
         )
     }
 }

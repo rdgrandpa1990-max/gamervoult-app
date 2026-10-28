@@ -87,15 +87,16 @@ object GamervoultRepository {
         }
     }
 
-    suspend fun register(
+    suspend fun signUpWithLicense(
         context: Context,
-        email: String,
-        pass: String,
+        licenseKey: String,
         name: String,
-        phone: String
+        phone: String,
+        email: String,
+        pass: String
     ): Result<UserProfile> {
         _isLoading.value = true
-        val res = ApiClient.register(email, pass, name, phone)
+        val res = ApiClient.signUpWithLicense(licenseKey, name, phone, email, pass)
         _isLoading.value = false
 
         return if (res.isSuccess) {
@@ -111,7 +112,35 @@ object GamervoultRepository {
             fetchChatMessages()
             Result.success(profile)
         } else {
-            Result.failure(res.exceptionOrNull() ?: Exception("Registration failed"))
+            Result.failure(res.exceptionOrNull() ?: Exception("Sign up with license failed"))
+        }
+    }
+
+    suspend fun loginWithGoogle(
+        context: Context,
+        email: String,
+        name: String,
+        idToken: String? = null,
+        photoUrl: String? = null
+    ): Result<UserProfile> {
+        _isLoading.value = true
+        val res = ApiClient.loginWithGoogle(email, name, idToken, photoUrl)
+        _isLoading.value = false
+
+        return if (res.isSuccess) {
+            val (token, profile) = res.getOrThrow()
+            sessionToken = token
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_TOKEN, token)
+                .apply()
+
+            _currentUser.value = profile
+            fetchOrders()
+            fetchChatMessages()
+            Result.success(profile)
+        } else {
+            Result.failure(res.exceptionOrNull() ?: Exception("Google sign in failed"))
         }
     }
 
@@ -170,16 +199,23 @@ object GamervoultRepository {
         }
     }
 
-    suspend fun createOrder(product: ProductItem): Result<OrderItem> {
-        val token = sessionToken ?: return Result.failure(Exception("Not authenticated"))
-        val user = _currentUser.value ?: return Result.failure(Exception("No active user session"))
+    suspend fun verifyLicenseKey(key: String): Result<LicenseVerifyResult> {
+        return ApiClient.verifyLicenseKey(key)
+    }
 
+    suspend fun createOrder(
+        product: ProductItem,
+        customerName: String = "",
+        customerEmail: String = "",
+        customerMobile: String = ""
+    ): Result<OrderItem> {
+        val user = _currentUser.value
         val res = ApiClient.createOrder(
-            token = token,
+            token = sessionToken,
             itemId = product.id,
-            customerName = user.name,
-            customerEmail = user.email,
-            customerMobile = user.phone ?: ""
+            customerName = if (customerName.isNotBlank()) customerName else (user?.name ?: "Guest Buyer"),
+            customerEmail = if (customerEmail.isNotBlank()) customerEmail else (user?.email ?: "guest@freefireofficial.in"),
+            customerMobile = if (customerMobile.isNotBlank()) customerMobile else (user?.phone ?: "")
         )
 
         if (res.isSuccess) {

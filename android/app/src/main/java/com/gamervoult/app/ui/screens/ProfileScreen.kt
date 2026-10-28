@@ -31,6 +31,12 @@ fun ProfileScreen() {
     val coroutineScope = rememberCoroutineScope()
     val user by GamervoultRepository.currentUser.collectAsStateWithLifecycle()
 
+    // If user is guest / not signed in, show AuthScreen directly in Profile tab (matching Image 3)
+    if (user == null) {
+        AuthScreen(onAuthSuccess = {})
+        return
+    }
+
     var licenseInput by remember { mutableStateOf("") }
     var isRedeeming by remember { mutableStateOf(false) }
     var showLogoutDialog by remember { mutableStateOf(false) }
