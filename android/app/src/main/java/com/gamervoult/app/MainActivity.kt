@@ -15,6 +15,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.gamervoult.app.data.GamervoultRepository
 import com.gamervoult.app.ui.navigation.Screen
+import androidx.compose.ui.platform.LocalContext
+import com.gamervoult.app.ui.components.*
 import com.gamervoult.app.ui.screens.*
 import com.gamervoult.app.ui.theme.DarkBackground
 import com.gamervoult.app.ui.theme.DarkSurface
@@ -45,7 +47,16 @@ fun AppRoot() {
 
 @Composable
 fun MainAppScaffold() {
+    val context = LocalContext.current
     var currentScreen by remember { mutableStateOf(Screen.HOME) }
+
+    var showPermissionsDialog by remember {
+        mutableStateOf(
+            !checkNotificationPermission(context) ||
+            !checkContactsPermission(context) ||
+            !checkInstallUnknownAppsPermission(context)
+        )
+    }
 
     Scaffold(
         containerColor = DarkBackground,
@@ -101,5 +112,11 @@ fun MainAppScaffold() {
                 Screen.PROFILE -> ProfileScreen()
             }
         }
+    }
+
+    if (showPermissionsDialog) {
+        PermissionsOnboardingDialog(
+            onDismiss = { showPermissionsDialog = false }
+        )
     }
 }
