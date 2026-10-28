@@ -27,12 +27,11 @@ export function getFirebaseAdmin() {
       });
       console.log('✅ [Firebase] Initialized using environment variables.');
     }
-    // 2. Service Account JSON file (Local development)
+    // 2. Service Account JSON file (Dedicated Development service account only)
     else {
       const candidatePaths = [
-        path.join(process.cwd(), 'serviceAccountKey.json'),
-        path.join(process.cwd(), '..', 'imap-proxy-server', 'serviceAccountKey.json'),
-        path.join(process.cwd(), '..', 'serviceAccountKey.json')
+        path.join(process.cwd(), 'dev-serviceAccountKey.json'),
+        path.join(process.cwd(), 'serviceAccountKey.json')
       ];
 
       let loaded = false;
@@ -42,18 +41,19 @@ export function getFirebaseAdmin() {
           admin.initializeApp({
             credential: admin.credential.cert(serviceAccount)
           });
-          console.log(`✅ [Firebase] Initialized using service account file: ${p}`);
+          console.log(`✅ [Firebase] Initialized using dedicated service account file: ${p}`);
           loaded = true;
           break;
         }
       }
 
       if (!loaded) {
-        // Fallback to default application credentials if running in GCP/Firebase
-        admin.initializeApp({
-          projectId: process.env.FIREBASE_PROJECT_ID || 'ff-store-4a61e'
-        });
-        console.warn('⚠️ [Firebase] Initialized with fallback project ID (read-only/mock mode).');
+        console.warn('⚠️ [Firebase] No development service account provided. Running in secure isolated mock/fallback mode.');
+        return {
+          admin: null,
+          db: null,
+          auth: null
+        };
       }
     }
 
@@ -67,3 +67,4 @@ export function getFirebaseAdmin() {
 }
 
 export { admin, db, auth };
+

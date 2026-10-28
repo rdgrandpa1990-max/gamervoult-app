@@ -89,3 +89,4 @@ cd android
 1. Import this repository into Vercel and set the **Root Directory** to `backend`.
 2. Configure the required environment variables in the Vercel Project Settings according to `backend/.env.example`.
 3. Preview deployments run automatically on pull requests.
+

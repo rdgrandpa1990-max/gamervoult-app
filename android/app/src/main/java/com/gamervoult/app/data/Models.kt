@@ -67,3 +67,4 @@ data class AppVersionInfo(
     val isArtifactAvailable: Boolean = false,
     val changelog: String = ""
 )
+

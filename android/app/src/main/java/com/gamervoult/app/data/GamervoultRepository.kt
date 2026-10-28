@@ -10,7 +10,7 @@ import java.util.Locale
 object GamervoultRepository {
 
     // Current User Session
-    private val _currentUser = MutableStateFlow(
+    private val _currentUser = MutableStateFlow<UserProfile?>(
         UserProfile(
             uid = "gv_user_7788",
             email = "player@gamervoult.in",
@@ -187,4 +187,55 @@ object GamervoultRepository {
         _orders.value = listOf(newOrder) + _orders.value
         return newOrder
     }
+
+    fun logout() {
+        _currentUser.value = null
+        _orders.value = emptyList()
+    }
+
+    fun login(
+        email: String = "player@gamervoult.in",
+        name: String = "Harsh Pandey",
+        role: String = "client"
+    ) {
+        _currentUser.value = UserProfile(
+            uid = "gv_user_7788",
+            email = email,
+            name = name,
+            role = role,
+            status = "Active",
+            isVip = true,
+            subscriptionExpiry = "30 Nov 2026"
+        )
+        // Reload user orders
+        _orders.value = listOf(
+            OrderItem(
+                orderCode = "GV-8X9P-4421",
+                itemId = "prod_01",
+                itemTitle = "Garena VIP ID 75 • 7 Evo Guns Maxed",
+                amount = 1499,
+                status = "PAID",
+                createdAt = "28 Oct 2026, 10:15 AM",
+                paidAt = "28 Oct 2026, 10:18 AM",
+                utr = "430192847192",
+                credentials = DeliveryCredentials(
+                    accountType = "Google",
+                    loginId = "vip_escrow_player75@gmail.com",
+                    password = "SecureEscrowPass#2026",
+                    backupCodes = "1829 4019, 8492 0184, 9182 3019",
+                    notes = "Login via Google Account. Do not modify recovery email within the first 48 hours to prevent security lock.",
+                    tutorialUrl = "https://freefireofficial.in/handover-tutorial"
+                )
+            ),
+            OrderItem(
+                orderCode = "GV-7Y1K-9022",
+                itemId = "prod_03",
+                itemTitle = "Grandmaster Rank Push ID • 4 Evo Level 6",
+                amount = 899,
+                status = "PENDING",
+                createdAt = "28 Oct 2026, 11:05 AM"
+            )
+        )
+    }
 }
+

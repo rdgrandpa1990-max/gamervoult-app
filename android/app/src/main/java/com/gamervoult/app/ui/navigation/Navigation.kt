@@ -15,3 +15,4 @@ enum class Screen(val title: String, val icon: ImageVector) {
     ORDERS("My Orders", Icons.Default.ShoppingBag),
     PROFILE("Profile", Icons.Default.Person)
 }
+
