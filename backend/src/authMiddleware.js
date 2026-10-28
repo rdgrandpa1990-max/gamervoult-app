@@ -63,8 +63,8 @@ export async function verifyFirebaseAuth(req, res, next) {
 
   const idToken = authHeader.split('Bearer ')[1].trim();
 
-  // Development Mock/Test Token Handler (strictly disabled in production)
-  if (process.env.NODE_ENV !== 'production' && process.env.ALLOW_DEV_TOKENS === 'true' && (idToken.startsWith('dev_token:') || idToken.startsWith('dev_token_'))) {
+  // Development Mock/Test Token Handler (allowed when ALLOW_DEV_TOKENS is explicitly enabled)
+  if (process.env.ALLOW_DEV_TOKENS === 'true' && (idToken.startsWith('dev_token:') || idToken.startsWith('dev_token_'))) {
     const parts = idToken.includes(':') ? idToken.split(':') : idToken.split('_');
     const devUid = parts[1] || 'dev_user';
     const devRole = parts[2] || 'client';

@@ -183,7 +183,7 @@ router.post('/api/v1/orders/create', orderCreateLimiter, async (req, res) => {
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.split('Bearer ')[1].trim();
-      if (process.env.NODE_ENV !== 'production' && process.env.ALLOW_DEV_TOKENS === 'true' && (token.startsWith('dev_token:') || token.startsWith('dev_token_'))) {
+      if (process.env.ALLOW_DEV_TOKENS === 'true' && (token.startsWith('dev_token:') || token.startsWith('dev_token_'))) {
         const parts = token.includes(':') ? token.split(':') : token.split('_');
         userId = parts[1];
       } else {

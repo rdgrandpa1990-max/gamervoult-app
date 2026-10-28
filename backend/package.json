@@ -9,6 +9,7 @@
     "dev": "node --watch api/index.js",
     "test": "node tests/test_backend.js",
     "test:dev-firebase": "node tests/test_dev_firebase.js",
+    "test:cloud-preview": "node tests/test_deployed_cloud_firestore.mjs",
     "test:all": "node tests/test_backend.js && node tests/test_dev_firebase.js"
   },
   "dependencies": {
