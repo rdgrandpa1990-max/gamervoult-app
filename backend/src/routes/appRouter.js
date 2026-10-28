@@ -2060,6 +2060,42 @@ router.post('/api/v1/chat/send', chatSendLimiter, verifyFirebaseAuth, async (req
   }
 });
 
+// =========================================================================
+// 8. Autonomous Supabase Payment Core Server-to-Server Proxy
+// Allows web admin / app to talk to Supabase edge function without CORS fences
+// =========================================================================
+router.all('/api/v1/payment-core/*', async (req, res) => {
+  const subPath = req.params[0] || '';
+  const targetUrl = `https://voncpwijuctbfiqictcp.supabase.co/functions/v1/api/${subPath}`;
+  
+  try {
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    if (req.headers['x-api-key']) headers['x-api-key'] = req.headers['x-api-key'];
+    if (req.headers['x-alert-secret']) headers['x-alert-secret'] = req.headers['x-alert-secret'];
+    if (req.headers['x-cron-secret']) headers['x-cron-secret'] = req.headers['x-cron-secret'];
+    
+    if (req.headers.origin) {
+      headers['Origin'] = req.headers.origin;
+    }
+
+    const fetchOptions = {
+      method: req.method,
+      headers
+    };
+    if (req.method !== 'GET' && req.method !== 'HEAD' && req.body && Object.keys(req.body).length > 0) {
+      fetchOptions.body = JSON.stringify(req.body);
+    }
+
+    const resp = await fetch(targetUrl, fetchOptions);
+    const data = await resp.json().catch(() => ({}));
+    return res.status(resp.status).json(data);
+  } catch (err) {
+    console.error('[PaymentCore Proxy] Error:', err);
+    return res.status(500).json({ error: 'proxy_failed', details: err.message });
+  }
+});
 
 export default router;
 
