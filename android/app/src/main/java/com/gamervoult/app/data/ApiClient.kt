@@ -219,9 +219,30 @@ object ApiClient {
                 }
 
                 val sanitizedImages = imagesList.mapNotNull { sanitizeMediaUrl(it) }
-                val rawMedia = if (p.has("mediaUrl") && !p.isNull("mediaUrl")) sanitizeMediaUrl(p.getString("mediaUrl")) else null
-                val finalMedia = rawMedia ?: sanitizedImages.firstOrNull()
+                val rawMedia = if (p.has("mediaUrl") && !p.isNull("mediaUrl")) p.getString("mediaUrl") else null
+                val thumbUrl = if (p.has("thumbnailUrl") && !p.isNull("thumbnailUrl")) p.getString("thumbnailUrl") else sanitizeMediaUrl(rawMedia)
+                val mType = if (p.has("mediaType") && !p.isNull("mediaType")) p.getString("mediaType") else detectMediaType(rawMedia)
+                val vidUrl = if (p.has("videoUrl") && !p.isNull("videoUrl")) p.getString("videoUrl") else (if (mType == "youtube" || mType == "video") rawMedia else null)
                 val acctUid = if (p.has("accountUid") && !p.isNull("accountUid")) p.getString("accountUid") else (if (p.has("gameUid") && !p.isNull("gameUid")) p.getString("gameUid") else null)
+
+                val mediaListItems = mutableListOf<MediaItem>()
+                val mListArr = p.optJSONArray("mediaList")
+                if (mListArr != null) {
+                    for (k in 0 until mListArr.length()) {
+                        val mObj = mListArr.optJSONObject(k)
+                        if (mObj != null) {
+                            val u = mObj.optString("url", "")
+                            val t = mObj.optString("thumbnailUrl", sanitizeMediaUrl(u) ?: u)
+                            val tp = mObj.optString("type", detectMediaType(u))
+                            if (u.isNotBlank()) {
+                                mediaListItems.add(MediaItem(url = u, thumbnailUrl = t, type = tp))
+                            }
+                        }
+                    }
+                }
+                if (mediaListItems.isEmpty() && !rawMedia.isNullOrBlank()) {
+                    mediaListItems.add(MediaItem(url = rawMedia, thumbnailUrl = thumbUrl ?: rawMedia, type = mType))
+                }
 
                 list.add(
                     ProductItem(
@@ -231,8 +252,12 @@ object ApiClient {
                         originalPrice = if (p.has("originalPrice") && !p.isNull("originalPrice")) p.getInt("originalPrice") else null,
                         category = p.optString("category", "General"),
                         description = p.optString("description", ""),
-                        mediaUrl = finalMedia,
-                        images = sanitizedImages.ifEmpty { if (finalMedia != null) listOf(finalMedia) else emptyList() },
+                        mediaUrl = rawMedia,
+                        thumbnailUrl = thumbUrl,
+                        mediaType = mType,
+                        videoUrl = vidUrl,
+                        images = sanitizedImages.ifEmpty { if (thumbUrl != null) listOf(thumbUrl) else emptyList() },
+                        mediaList = mediaListItems,
                         badge = if (p.has("badge") && !p.isNull("badge")) p.getString("badge") else null,
                         level = if (p.has("level") && !p.isNull("level")) p.getInt("level") else null,
                         evoGuns = if (p.has("evoGuns") && !p.isNull("evoGuns")) p.getInt("evoGuns") else null,

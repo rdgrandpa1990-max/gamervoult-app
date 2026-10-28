@@ -1,5 +1,11 @@
 package com.gamervoult.app.data
 
+data class MediaItem(
+    val url: String,
+    val thumbnailUrl: String,
+    val type: String = "image" // "youtube", "video", "image"
+)
+
 data class ProductItem(
     val id: String,
     val title: String,
@@ -8,7 +14,11 @@ data class ProductItem(
     val category: String = "General",
     val description: String = "",
     val mediaUrl: String? = null,
+    val thumbnailUrl: String? = null,
+    val mediaType: String = "image",
+    val videoUrl: String? = null,
     val images: List<String> = emptyList(),
+    val mediaList: List<MediaItem> = emptyList(),
     val badge: String? = null,
     val level: Int? = null,
     val evoGuns: Int? = null,
@@ -124,5 +134,25 @@ fun sanitizeMediaUrl(rawUrl: String?): String? {
         return url.substring(0, url.length - 4) + ".jpg"
     }
     return url
+}
+
+fun detectMediaType(url: String?): String {
+    if (url.isNullOrBlank()) return "image"
+    val lower = url.lowercase().trim()
+    if (lower.contains("youtube.com") || lower.contains("youtu.be")) return "youtube"
+    if (lower.contains("/video/upload/") || lower.contains("/video/") || lower.endsWith(".mp4") || lower.endsWith(".webm") || lower.endsWith(".mov")) return "video"
+    return "image"
+}
+
+fun extractYouTubeId(url: String?): String? {
+    if (url.isNullOrBlank()) return null
+    val trimmed = url.trim()
+    return when {
+        trimmed.contains("youtu.be/") -> trimmed.substringAfter("youtu.be/").substringBefore("?").substringBefore("/")
+        trimmed.contains("youtube.com/watch") -> trimmed.substringAfter("v=").substringBefore("&")
+        trimmed.contains("youtube.com/embed/") -> trimmed.substringAfter("embed/").substringBefore("?").substringBefore("/")
+        trimmed.contains("youtube.com/shorts/") -> trimmed.substringAfter("shorts/").substringBefore("?").substringBefore("/")
+        else -> null
+    }
 }
 

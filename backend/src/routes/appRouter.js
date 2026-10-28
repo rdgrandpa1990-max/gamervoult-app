@@ -564,7 +564,7 @@ router.get('/api/v1/app/version-check', async (req, res) => {
     let minVersionCode = 1;
     let latestVersionCode = 2; // Incremented so update is detected when client is v1
     let latestVersionName = '1.0.1';
-    let downloadUrl = 'https://github.com/rdgrandpa1990-max/gamervoult-app/releases/download/v1.0.0/app-release.apk';
+    let downloadUrl = 'https://github.com/rdgrandpa1990-max/gamervoult-app/releases/download/v1.0.1/gamervoult-v1.0.1.apk';
     let changelog = '• Fixed black image thumbnails for video and YouTube accounts\n• In-app OTA APK auto-updater with live progress\n• File system and local cache access permissions';
 
     // Live check from Firestore system_settings/app_version
@@ -583,8 +583,9 @@ router.get('/api/v1/app/version-check', async (req, res) => {
       console.warn('[VersionCheck] Live doc fetch note:', e.message);
     }
 
-    const updateAvailable = clientVersionCode < latestVersionCode;
-    const mandatoryUpdate = clientVersionCode < minVersionCode;
+    // Strictly verify: Client version MUST match server version to run the app
+    const updateAvailable = clientVersionCode !== latestVersionCode || clientVersionName !== latestVersionName;
+    const mandatoryUpdate = updateAvailable;
 
     return res.status(200).json({
       success: true,
@@ -607,9 +608,18 @@ router.get('/api/v1/app/version-check', async (req, res) => {
 });
 
 router.get('/api/v1/app/download-apk', (req, res) => {
-  const downloadUrl = 'https://github.com/rdgrandpa1990-max/gamervoult-app/releases/download/v1.0.0/app-release.apk';
+  const downloadUrl = 'https://github.com/rdgrandpa1990-max/gamervoult-app/releases/download/v1.0.1/gamervoult-v1.0.1.apk';
   return res.redirect(302, downloadUrl);
 });
+
+// Helper: Detect whether media URL is YouTube, MP4 Video, or standard Image
+function detectMediaType(url) {
+  if (!url || typeof url !== 'string') return 'image';
+  const str = url.toLowerCase().trim();
+  if (str.includes('youtube.com') || str.includes('youtu.be')) return 'youtube';
+  if (str.includes('/video/upload/') || str.includes('/video/') || str.endsWith('.mp4') || str.endsWith('.webm') || str.endsWith('.mov')) return 'video';
+  return 'image';
+}
 
 // Helper: Convert YouTube and Cloudinary MP4 video URLs to high-resolution image thumbnails
 function getSanitizedThumbnail(url) {
@@ -755,6 +765,28 @@ router.get('/api/v1/products', async (req, res) => {
           const deliveryMode = f.deliveryMode ? f.deliveryMode.stringValue : 'contact_seller';
           const createdAt = f.createdAt ? f.createdAt.stringValue : (docItem.createTime || new Date().toISOString());
 
+          const rawMediaUrl = (f.mediaUrl ? f.mediaUrl.stringValue : null) || (rawMediaList[0] ? rawMediaList[0].url : null);
+          const sanitizedThumb = getSanitizedThumbnail(rawMediaUrl);
+          const detectedType = detectMediaType(rawMediaUrl);
+          const isVid = detectedType === 'youtube' || detectedType === 'video';
+
+          const formattedMediaList = rawMediaList.map(m => {
+            const mUrl = typeof m === 'string' ? m : (m.url || '');
+            const mType = (m && m.type && m.type !== 'image') ? m.type : detectMediaType(mUrl);
+            return {
+              url: mUrl,
+              thumbnailUrl: getSanitizedThumbnail(mUrl),
+              type: mType
+            };
+          });
+          if (formattedMediaList.length === 0 && rawMediaUrl) {
+            formattedMediaList.push({
+              url: rawMediaUrl,
+              thumbnailUrl: sanitizedThumb,
+              type: detectedType
+            });
+          }
+
           products.push({
             id,
             title,
@@ -762,8 +794,11 @@ router.get('/api/v1/products', async (req, res) => {
             originalPrice: origPrice,
             category: rank ? `Rank: ${rank}` : 'Free Fire',
             description: desc,
-            mediaUrl: primaryMedia,
-            mediaList: rawMediaList,
+            mediaUrl: rawMediaUrl, // Original YouTube or MP4 video URL preserved!
+            thumbnailUrl: sanitizedThumb, // High-res JPEG poster so card grid is never black
+            mediaType: detectedType, // 'youtube' | 'video' | 'image'
+            videoUrl: isVid ? rawMediaUrl : null,
+            mediaList: formattedMediaList,
             images: allImages,
             badge: f.badge ? f.badge.stringValue : null,
             level,

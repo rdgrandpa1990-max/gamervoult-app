@@ -41,6 +41,10 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.compose.SubcomposeAsyncImage
+import androidx.compose.ui.viewinterop.AndroidView
+import com.gamervoult.app.data.MediaItem
+import com.gamervoult.app.data.extractYouTubeId
+import com.gamervoult.app.data.detectMediaType
 import com.gamervoult.app.data.sanitizeMediaUrl
 import coil.request.ImageRequest
 import com.gamervoult.app.data.GamervoultRepository
@@ -642,7 +646,9 @@ fun ProductGridCard(
                 contentAlignment = Alignment.Center
             ) {
                 // Real Free Fire Cloudinary Screenshot with Fallback (No Black Voids)
-                val targetPhotoUrl = sanitizeMediaUrl(product.mediaUrl ?: product.images.firstOrNull())
+                val targetPhotoUrl = product.thumbnailUrl ?: sanitizeMediaUrl(product.mediaUrl) ?: product.images.firstOrNull()
+                val isVideoCard = product.mediaType == "youtube" || product.mediaType == "video" || !product.videoUrl.isNullOrBlank()
+
                 SubcomposeAsyncImage(
                     model = ImageRequest.Builder(context)
                         .data(targetPhotoUrl)
@@ -702,6 +708,48 @@ fun ProductGridCard(
                         }
                     }
                 )
+
+                // Central Play Button Overlay if Account has Gameplay Video
+                if (isVideoCard) {
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.65f))
+                            .border(1.5.dp, Color.White.copy(alpha = 0.8f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = "Play Video",
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+
+                    // Bottom-Start Badge: YT VIDEO or VIDEO
+                    Surface(
+                        color = if (product.mediaType == "youtube") Color(0xFFDC2626) else PrimaryIndigo,
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(6.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(11.dp))
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Text(
+                                text = if (product.mediaType == "youtube") "YT VIDEO" else "VIDEO",
+                                color = Color.White,
+                                fontSize = 8.5.sp,
+                                fontWeight = FontWeight.Black
+                            )
+                        }
+                    }
+                }
 
                 // Top-Left Badge: Level
                 Surface(
@@ -867,23 +915,35 @@ fun ProductDetailPhotoDialog(
     onBuyClick: () -> Unit
 ) {
     val context = LocalContext.current
-    val allImages = remember(product) {
-        val list = mutableListOf<String>()
-        val sanitizedMedia = sanitizeMediaUrl(product.mediaUrl)
-        if (!sanitizedMedia.isNullOrBlank()) list.add(sanitizedMedia)
-        product.images.forEach { img ->
-            val sImg = sanitizeMediaUrl(img)
-            if (!sImg.isNullOrBlank() && !list.contains(sImg)) {
-                list.add(sImg)
+    val mediaItems = remember(product) {
+        if (product.mediaList.isNotEmpty()) {
+            product.mediaList
+        } else {
+            val list = mutableListOf<MediaItem>()
+            if (!product.mediaUrl.isNullOrBlank()) {
+                val t = product.thumbnailUrl ?: sanitizeMediaUrl(product.mediaUrl) ?: product.mediaUrl
+                list.add(MediaItem(url = product.mediaUrl, thumbnailUrl = t, type = product.mediaType))
             }
+            product.images.forEach { img ->
+                if (img.isNotBlank() && list.none { it.url == img }) {
+                    list.add(MediaItem(url = img, thumbnailUrl = sanitizeMediaUrl(img) ?: img, type = detectMediaType(img)))
+                }
+            }
+            if (list.isEmpty()) {
+                list.add(
+                    MediaItem(
+                        url = "https://res.cloudinary.com/dolc2kuyx/image/upload/v1793185282/IMG_4229_yz1sgb.png",
+                        thumbnailUrl = "https://res.cloudinary.com/dolc2kuyx/image/upload/v1793185282/IMG_4229_yz1sgb.png",
+                        type = "image"
+                    )
+                )
+            }
+            list
         }
-        if (list.isEmpty()) {
-            list.add("https://res.cloudinary.com/dolc2kuyx/image/upload/v1793185282/IMG_4229_yz1sgb.png")
-        }
-        list
     }
 
     var currentPhotoIndex by remember { mutableStateOf(0) }
+    val currentMedia = mediaItems.getOrNull(currentPhotoIndex) ?: mediaItems.firstOrNull()
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -958,7 +1018,7 @@ fun ProductDetailPhotoDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // 2. MAIN FULL-SIZE PHOTO PREVIEW
+                // 2. MAIN FULL-SIZE PREVIEW (AUTOMATIC VIDEO / YOUTUBE PLAY OR SCREENSHOT)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -968,27 +1028,100 @@ fun ProductDetailPhotoDialog(
                         .border(1.dp, DarkBorder, RoundedCornerShape(18.dp)),
                     contentAlignment = Alignment.Center
                 ) {
-                    SubcomposeAsyncImage(
-                        model = ImageRequest.Builder(context)
-                            .data(allImages.getOrNull(currentPhotoIndex))
-                            .crossfade(true)
-                            .build(),
-                        contentDescription = "Full Account Photo",
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxSize(),
-                        loading = {
-                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator(color = PrimaryIndigo, strokeWidth = 2.dp)
+                    if (currentMedia != null) {
+                        when (currentMedia.type) {
+                            "youtube" -> {
+                                val ytId = extractYouTubeId(currentMedia.url)
+                                if (!ytId.isNullOrBlank()) {
+                                    AndroidView(
+                                        factory = { ctx ->
+                                            android.webkit.WebView(ctx).apply {
+                                                layoutParams = android.view.ViewGroup.LayoutParams(
+                                                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                                                    android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                                                )
+                                                settings.javaScriptEnabled = true
+                                                settings.mediaPlaybackRequiresUserGesture = false
+                                                settings.domStorageEnabled = true
+                                                webChromeClient = android.webkit.WebChromeClient()
+                                                webViewClient = android.webkit.WebViewClient()
+                                                val html = """
+                                                    <!DOCTYPE html>
+                                                    <html>
+                                                    <head>
+                                                      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                                                      <style>
+                                                        body { margin: 0; padding: 0; background-color: #000; display: flex; align-items: center; justify-content: center; height: 100vh; }
+                                                        iframe { width: 100%; height: 100%; border: none; }
+                                                      </style>
+                                                    </head>
+                                                    <body>
+                                                      <iframe src="https://www.youtube.com/embed/$ytId?autoplay=1&mute=0&controls=1&playsinline=1" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+                                                    </body>
+                                                    </html>
+                                                """.trimIndent()
+                                                loadDataWithBaseURL("https://www.youtube.com", html, "text/html", "UTF-8", null)
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                } else {
+                                    SubcomposeAsyncImage(
+                                        model = ImageRequest.Builder(context).data(currentMedia.thumbnailUrl).crossfade(true).build(),
+                                        contentDescription = "YouTube Thumbnail",
+                                        contentScale = ContentScale.Fit,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
                             }
-                        },
-                        error = {
-                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Text("Preview Unavailable", color = TextMuted, fontSize = 12.sp)
+
+                            "video" -> {
+                                AndroidView(
+                                    factory = { ctx ->
+                                        android.widget.VideoView(ctx).apply {
+                                            layoutParams = android.view.ViewGroup.LayoutParams(
+                                                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                                                android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                                            )
+                                            setVideoURI(Uri.parse(currentMedia.url))
+                                            val controller = android.widget.MediaController(ctx)
+                                            controller.setAnchorView(this)
+                                            setMediaController(controller)
+                                            setOnPreparedListener { mp ->
+                                                mp.isLooping = true
+                                                start() // Automatic video play!
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+
+                            else -> {
+                                SubcomposeAsyncImage(
+                                    model = ImageRequest.Builder(context)
+                                        .data(currentMedia.thumbnailUrl.ifBlank { currentMedia.url })
+                                        .crossfade(true)
+                                        .build(),
+                                    contentDescription = "Full Account Photo",
+                                    contentScale = ContentScale.Fit,
+                                    modifier = Modifier.fillMaxSize(),
+                                    loading = {
+                                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                            CircularProgressIndicator(color = PrimaryIndigo, strokeWidth = 2.dp)
+                                        }
+                                    },
+                                    error = {
+                                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                            Text("Preview Unavailable", color = TextMuted, fontSize = 12.sp)
+                                        }
+                                    }
+                                )
                             }
                         }
-                    )
+                    }
 
-                    // Photo Counter Badge
+                    // Media Type & Counter Badge
                     Surface(
                         color = Color.Black.copy(alpha = 0.75f),
                         shape = RoundedCornerShape(8.dp),
@@ -997,7 +1130,7 @@ fun ProductDetailPhotoDialog(
                             .padding(10.dp)
                     ) {
                         Text(
-                            text = "Photo ${currentPhotoIndex + 1} of ${allImages.size}",
+                            text = "${if (currentMedia?.type == "youtube") "▶ YouTube" else if (currentMedia?.type == "video") "▶ Video" else "Photo"} ${currentPhotoIndex + 1} of ${mediaItems.size}",
                             color = Color.White,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
@@ -1006,7 +1139,7 @@ fun ProductDetailPhotoDialog(
                     }
 
                     // Left Nav Arrow
-                    if (allImages.size > 1 && currentPhotoIndex > 0) {
+                    if (mediaItems.size > 1 && currentPhotoIndex > 0) {
                         IconButton(
                             onClick = { currentPhotoIndex-- },
                             modifier = Modifier
@@ -1021,7 +1154,7 @@ fun ProductDetailPhotoDialog(
                     }
 
                     // Right Nav Arrow
-                    if (allImages.size > 1 && currentPhotoIndex < allImages.size - 1) {
+                    if (mediaItems.size > 1 && currentPhotoIndex < mediaItems.size - 1) {
                         IconButton(
                             onClick = { currentPhotoIndex++ },
                             modifier = Modifier
@@ -1036,12 +1169,40 @@ fun ProductDetailPhotoDialog(
                     }
                 }
 
+                // Dedicated button to open YouTube App directly if currently viewing YouTube
+                if (currentMedia?.type == "youtube") {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            try {
+                                val ytIntent = Intent(Intent.ACTION_VIEW, Uri.parse(currentMedia.url)).apply {
+                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                }
+                                context.startActivity(ytIntent)
+                            } catch (e: Exception) {
+                                // fallback
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(42.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Watch in Official YouTube App", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // 3. HORIZONTAL THUMBNAILS GALLERY (Tap any thumbnail to see it)
-                if (allImages.size > 1) {
+                // 3. HORIZONTAL THUMBNAILS GALLERY (Tap any thumbnail to see video/photo)
+                if (mediaItems.size > 1) {
                     Text(
-                        text = "All Account Photos (${allImages.size})",
+                        text = "Account Media & Proofs (${mediaItems.size})",
                         color = TextSecondary,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
@@ -1052,11 +1213,11 @@ fun ProductDetailPhotoDialog(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        itemsIndexed(allImages) { idx, imgUrl ->
+                        itemsIndexed(mediaItems) { idx, item ->
                             val isSelected = idx == currentPhotoIndex
                             Box(
                                 modifier = Modifier
-                                    .size(64.dp)
+                                    .size(68.dp)
                                     .clip(RoundedCornerShape(10.dp))
                                     .background(DarkSurface)
                                     .border(
@@ -1066,12 +1227,28 @@ fun ProductDetailPhotoDialog(
                                     )
                                     .clickable { currentPhotoIndex = idx }
                             ) {
-                                AsyncImage(
-                                    model = ImageRequest.Builder(context).data(imgUrl).crossfade(true).build(),
-                                    contentDescription = "Thumbnail",
+                                SubcomposeAsyncImage(
+                                    model = ImageRequest.Builder(context).data(item.thumbnailUrl.ifBlank { item.url }).crossfade(true).build(),
+                                    contentDescription = "Thumbnail $idx",
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier.fillMaxSize()
                                 )
+
+                                if (item.type == "youtube" || item.type == "video") {
+                                    Surface(
+                                        color = if (item.type == "youtube") Color(0xFFDC2626) else PrimaryIndigo,
+                                        shape = RoundedCornerShape(4.dp),
+                                        modifier = Modifier.align(Alignment.BottomCenter).padding(2.dp)
+                                    ) {
+                                        Text(
+                                            text = if (item.type == "youtube") "▶ YT" else "▶ VID",
+                                            color = Color.White,
+                                            fontSize = 8.sp,
+                                            fontWeight = FontWeight.Black,
+                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

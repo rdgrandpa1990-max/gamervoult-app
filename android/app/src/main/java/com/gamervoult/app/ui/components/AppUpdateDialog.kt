@@ -171,12 +171,11 @@ fun AppUpdateDialog(
 
     Dialog(
         onDismissRequest = {
-            if (!updateInfo.mandatoryUpdate && downloadState != UpdateDownloadState.DOWNLOADING) {
-                onDismiss()
-            }
+            // App strictly requires matching server version to run; exit if dismissed
+            (context as? android.app.Activity)?.finishAffinity()
         },
         properties = DialogProperties(
-            dismissOnBackPress = !updateInfo.mandatoryUpdate,
+            dismissOnBackPress = true,
             dismissOnClickOutside = false,
             usePlatformDefaultWidth = false
         )
@@ -346,14 +345,18 @@ fun AppUpdateDialog(
                                 }
                             }
 
-                            if (!updateInfo.mandatoryUpdate) {
-                                Spacer(modifier = Modifier.height(10.dp))
-                                TextButton(
-                                    onClick = onDismiss,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            TextButton(
+                                onClick = {
+                                    (context as? android.app.Activity)?.finishAffinity()
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Close, contentDescription = null, tint = TextMuted, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "Later",
+                                        text = "Exit GamerVault",
                                         color = TextMuted,
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Medium
@@ -456,11 +459,9 @@ fun AppUpdateDialog(
                                 Text("Retry Download", color = Color.White, fontWeight = FontWeight.Bold)
                             }
 
-                            if (!updateInfo.mandatoryUpdate) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                TextButton(onClick = onDismiss) {
-                                    Text("Dismiss", color = TextMuted, fontSize = 12.sp)
-                                }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            TextButton(onClick = { (context as? android.app.Activity)?.finishAffinity() }) {
+                                Text("Exit App", color = TextMuted, fontSize = 12.sp)
                             }
                         }
                     }
