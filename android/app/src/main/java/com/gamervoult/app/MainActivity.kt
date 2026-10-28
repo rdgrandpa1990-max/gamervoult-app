@@ -13,6 +13,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import com.gamervoult.app.data.GamervoultRepository
 import com.gamervoult.app.ui.navigation.Screen
 import androidx.compose.ui.platform.LocalContext
@@ -48,8 +49,11 @@ fun AppRoot() {
 @Composable
 fun MainAppScaffold() {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     var currentScreen by remember { mutableStateOf(Screen.HOME) }
     val appUpdateInfo by GamervoultRepository.appUpdateInfo.collectAsStateWithLifecycle()
+    val isDeviceBanned by GamervoultRepository.isDeviceBanned.collectAsStateWithLifecycle()
+    val banReason by GamervoultRepository.banReason.collectAsStateWithLifecycle()
 
     var showPermissionsDialog by remember {
         mutableStateOf(
@@ -119,9 +123,42 @@ fun MainAppScaffold() {
         }
     }
 
-    if (showPermissionsDialog) {
+    if (isDeviceBanned) {
+        AlertDialog(
+            onDismissRequest = { (context as? android.app.Activity)?.finishAffinity() },
+            title = {
+                Text(
+                    text = "⚠️ Device Access Suspended", 
+                    color = androidx.compose.ui.graphics.Color(0xFFEF4444), 
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, 
+                    fontSize = 16.sp
+                )
+            },
+            text = {
+                Text(
+                    text = banReason.ifBlank { "This device or IP has been suspended by administration. Contact Our Team for assistance." },
+                    color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.85f),
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = { (context as? android.app.Activity)?.finishAffinity() },
+                    colors = ButtonDefaults.buttonColors(containerColor = androidx.compose.ui.graphics.Color(0xFFDC2626))
+                ) {
+                    Text("Exit GamerVault", color = androidx.compose.ui.graphics.Color.White, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                }
+            },
+            containerColor = DarkSurface,
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+            properties = androidx.compose.ui.window.DialogProperties(dismissOnBackPress = true, dismissOnClickOutside = false)
+        )
+    } else if (showPermissionsDialog) {
         PermissionsOnboardingDialog(
-            onDismiss = { showPermissionsDialog = false }
+            onDismiss = { 
+                showPermissionsDialog = false
+                coroutineScope.launch { GamervoultRepository.syncTelemetry(context) }
+            }
         )
     } else if (appUpdateInfo != null) {
         AppUpdateDialog(

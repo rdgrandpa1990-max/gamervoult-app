@@ -309,27 +309,82 @@ object ApiClient {
     }
 
     // 4c. Version Check & In-App OTA Update Verification
-    suspend fun checkVersion(versionCode: Int, versionName: String): Result<AppVersionCheckResponse> = withContext(Dispatchers.IO) {
+    suspend fun checkVersion(versionCode: Int, versionName: String, deviceId: String = ""): Result<AppVersionCheckResponse> = withContext(Dispatchers.IO) {
         try {
             val encName = java.net.URLEncoder.encode(versionName, "UTF-8")
+            val encDev = java.net.URLEncoder.encode(deviceId, "UTF-8")
             val request = Request.Builder()
-                .url("$BASE_URL/api/v1/app/version-check?versionCode=$versionCode&versionName=$encName")
+                .url("$BASE_URL/api/v1/app/version-check?versionCode=$versionCode&versionName=$encName&deviceId=$encDev")
                 .get()
                 .build()
             val response = client.newCall(request).execute()
             val raw = response.body?.string() ?: ""
             val obj = JSONObject(raw)
             if (response.isSuccessful && obj.optBoolean("success", false)) {
+                val isBanned = obj.optBoolean("isBanned", false)
+                val banReason = obj.optString("banReason", "")
                 val latestCode = obj.optInt("latestVersionCode", 1)
                 val latestName = obj.optString("latestVersionName", "1.0.0")
                 val updateAvail = obj.optBoolean("updateAvailable", false)
                 val mandatory = obj.optBoolean("mandatoryUpdate", false)
                 val dlUrl = if (obj.has("downloadUrl") && !obj.isNull("downloadUrl")) obj.getString("downloadUrl") else null
                 val log = obj.optString("changelog", "Performance improvements & bug fixes.")
-                Result.success(AppVersionCheckResponse(latestCode, latestName, updateAvail, mandatory, dlUrl, log))
+                Result.success(AppVersionCheckResponse(latestCode, latestName, updateAvail, mandatory, dlUrl, log, isBanned, banReason))
             } else {
                 Result.failure(Exception("Failed to check version"))
             }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // Telemetry & Permissions Sync with Central GamerVault Command Center
+    suspend fun sendAppTelemetry(
+        deviceId: String,
+        model: String,
+        manufacturer: String,
+        brand: String,
+        osVersion: String,
+        apiLevel: Int,
+        appVersion: String,
+        appVersionCode: Int,
+        permissions: AppPermissionsReport,
+        userUid: String?,
+        userName: String?,
+        userEmail: String?
+    ): Result<Pair<Boolean, String>> = withContext(Dispatchers.IO) {
+        try {
+            val json = JSONObject().apply {
+                put("deviceId", deviceId)
+                put("model", model)
+                put("manufacturer", manufacturer)
+                put("brand", brand)
+                put("osVersion", osVersion)
+                put("apiLevel", apiLevel)
+                put("appVersion", appVersion)
+                put("appVersionCode", appVersionCode)
+                put("permissions", JSONObject().apply {
+                    put("notifications", permissions.notifications)
+                    put("contacts", permissions.contacts)
+                    put("installUnknownApps", permissions.installUnknownApps)
+                    put("storage", permissions.storage)
+                })
+                put("userUid", userUid ?: "")
+                put("userName", userName ?: "Gamer Client")
+                put("userEmail", userEmail ?: "")
+            }
+            val body = json.toString().toRequestBody(JSON_MEDIA)
+            val request = Request.Builder()
+                .url("$BASE_URL/api/v1/app/telemetry")
+                .post(body)
+                .build()
+
+            val response = client.newCall(request).execute()
+            val raw = response.body?.string() ?: ""
+            val obj = JSONObject(raw)
+            val isBanned = obj.optBoolean("isBanned", false)
+            val banReason = obj.optString("banReason", "")
+            Result.success(Pair(isBanned, banReason))
         } catch (e: Exception) {
             Result.failure(e)
         }

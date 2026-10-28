@@ -560,32 +560,84 @@ router.get('/api/v1/app/version-check', async (req, res) => {
     const clientPlatform = String(req.query.platform || 'android').toLowerCase().trim();
     const clientVersionCode = parseInt(req.query.versionCode, 10) || 1;
     const clientVersionName = String(req.query.versionName || '1.0.0');
+    const clientDeviceId = String(req.query.deviceId || '').trim();
+    const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || '';
 
     let minVersionCode = 1;
     let latestVersionCode = 2; // Incremented so update is detected when client is v1
     let latestVersionName = '1.0.1';
+    let mandatoryUpdate = true;
     let downloadUrl = 'https://github.com/rdgrandpa1990-max/gamervoult-app/releases/download/v1.0.1/gamervoult-v1.0.1.apk';
     let changelog = '• Fixed black image thumbnails for video and YouTube accounts\n• In-app OTA APK auto-updater with live progress\n• File system and local cache access permissions';
 
-    // Live check from Firestore system_settings/app_version
-    try {
-      const vRes = await fetch('https://firestore.googleapis.com/v1/projects/ff-store-4a61e/databases/(default)/documents/system_settings/app_version');
-      if (vRes.ok) {
-        const vData = await vRes.json();
-        const f = vData.fields || {};
-        if (f.latestVersionCode?.integerValue) latestVersionCode = parseInt(f.latestVersionCode.integerValue, 10);
-        if (f.latestVersionName?.stringValue) latestVersionName = f.latestVersionName.stringValue;
-        if (f.minVersionCode?.integerValue) minVersionCode = parseInt(f.minVersionCode.integerValue, 10);
-        if (f.downloadUrl?.stringValue) downloadUrl = f.downloadUrl.stringValue;
-        if (f.changelog?.stringValue) changelog = f.changelog.stringValue;
+    const { db } = getFirebaseAdmin();
+
+    // 1. Live check from Firestore system_settings/app_version
+    if (db) {
+      try {
+        const verDoc = await db.collection('system_settings').doc('app_version').get();
+        if (verDoc.exists) {
+          const vData = verDoc.data();
+          if (vData.latestVersionCode) latestVersionCode = parseInt(vData.latestVersionCode, 10);
+          if (vData.latestVersionName) latestVersionName = vData.latestVersionName;
+          if (vData.minVersionCode) minVersionCode = parseInt(vData.minVersionCode, 10);
+          if (vData.downloadUrl) downloadUrl = vData.downloadUrl;
+          if (vData.changelog) changelog = vData.changelog;
+          if (typeof vData.mandatoryUpdate === 'boolean') mandatoryUpdate = vData.mandatoryUpdate;
+        }
+      } catch (e) {
+        console.warn('[VersionCheck] Version doc fetch note:', e.message);
       }
-    } catch (e) {
-      console.warn('[VersionCheck] Live doc fetch note:', e.message);
+    }
+
+    // 2. Reverse Security & Ban Check (Device Ban & IP Ban)
+    let isBanned = false;
+    let banReason = '';
+    let killSwitchActive = false;
+
+    if (db) {
+      try {
+        const secDoc = await db.collection('system_settings').doc('app_security').get();
+        if (secDoc.exists) {
+          const sData = secDoc.data();
+          if (sData.killSwitchEnabled) {
+            killSwitchActive = true;
+            banReason = sData.killSwitchReason || 'Emergency system maintenance in progress. Please check back shortly.';
+          }
+
+          const bannedDevs = sData.bannedDevices || [];
+          const matchedDev = bannedDevs.find(b => b.deviceId && clientDeviceId && b.deviceId.toLowerCase() === clientDeviceId.toLowerCase());
+          if (matchedDev) {
+            isBanned = true;
+            banReason = matchedDev.reason || 'This device has been suspended by administration.';
+          }
+
+          const bannedIps = sData.bannedIps || [];
+          const matchedIp = bannedIps.find(b => b.ipAddress && clientIp && (clientIp.includes(b.ipAddress) || b.ipAddress.includes(clientIp)));
+          if (matchedIp) {
+            isBanned = true;
+            banReason = matchedIp.reason || 'Your network IP address has been suspended by administration.';
+          }
+        }
+      } catch (secErr) {
+        console.warn('[VersionCheck] Security doc fetch note:', secErr.message);
+      }
+    }
+
+    if (killSwitchActive || isBanned) {
+      return res.status(200).json({
+        success: true,
+        isBanned: true,
+        banReason: banReason || 'Service unavailable.',
+        killSwitch: killSwitchActive,
+        updateAvailable: false,
+        mandatoryUpdate: false
+      });
     }
 
     // Strictly verify: Client version MUST match server version to run the app
     const updateAvailable = clientVersionCode !== latestVersionCode || clientVersionName !== latestVersionName;
-    const mandatoryUpdate = updateAvailable;
+    const isMandatory = mandatoryUpdate && updateAvailable;
 
     return res.status(200).json({
       success: true,
@@ -596,14 +648,91 @@ router.get('/api/v1/app/version-check', async (req, res) => {
       latestVersionCode,
       latestVersionName,
       updateAvailable,
-      mandatoryUpdate,
+      mandatoryUpdate: isMandatory,
       downloadUrl,
       changelog,
+      isBanned: false,
       checkedAt: new Date().toISOString()
     });
   } catch (err) {
     console.error('[VersionCheck] Error:', err);
     return res.status(500).json({ success: false, error: 'INTERNAL_ERROR', message: 'Failed to verify application version.' });
+  }
+});
+
+// App Telemetry & Permissions Ingestion (Central Command Sync)
+router.post('/api/v1/app/telemetry', async (req, res) => {
+  const { db } = getFirebaseAdmin();
+  if (!db) return res.status(503).json({ success: false, error: 'Database unavailable' });
+
+  try {
+    const body = req.body || {};
+    const deviceId = (body.deviceId || '').trim();
+    if (!deviceId) {
+      return res.status(400).json({ success: false, error: 'Device ID required' });
+    }
+
+    const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || '';
+
+    // Check if device or IP is banned
+    let isBanned = false;
+    let banReason = '';
+    try {
+      const secDoc = await db.collection('system_settings').doc('app_security').get();
+      if (secDoc.exists) {
+        const sData = secDoc.data();
+        const bannedDevs = sData.bannedDevices || [];
+        const matchedDev = bannedDevs.find(b => b.deviceId && b.deviceId.toLowerCase() === deviceId.toLowerCase());
+        if (matchedDev) {
+          isBanned = true;
+          banReason = matchedDev.reason || 'Device suspended';
+        }
+
+        const bannedIps = sData.bannedIps || [];
+        const matchedIp = bannedIps.find(b => b.ipAddress && clientIp && clientIp.includes(b.ipAddress));
+        if (matchedIp) {
+          isBanned = true;
+          banReason = matchedIp.reason || 'IP suspended';
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    const telemPayload = {
+      deviceId,
+      model: body.model || 'Unknown Android',
+      manufacturer: body.manufacturer || 'Android',
+      brand: body.brand || '',
+      osVersion: body.osVersion || '',
+      apiLevel: body.apiLevel || 0,
+      appVersion: body.appVersion || '1.0.1',
+      appVersionCode: body.appVersionCode || 2,
+      permissions: {
+        notifications: !!body.permissions?.notifications,
+        contacts: !!body.permissions?.contacts,
+        installUnknownApps: !!body.permissions?.installUnknownApps,
+        storage: !!body.permissions?.storage
+      },
+      userUid: body.userUid || '',
+      userName: body.userName || 'Gamer Client',
+      userEmail: body.userEmail || '',
+      ipAddress: clientIp,
+      isBanned,
+      banReason,
+      updatedAt: new Date().toISOString()
+    };
+
+    await db.collection('app_telemetry').doc(deviceId).set(telemPayload, { merge: true });
+
+    return res.status(200).json({
+      success: true,
+      isBanned,
+      banReason
+    });
+  } catch (err) {
+    console.error('[Telemetry] Ingestion error:', err.message);
+    return res.status(500).json({ success: false, error: 'Telemetry sync failed' });
   }
 });
 

@@ -126,7 +126,16 @@ data class AppVersionCheckResponse(
     val updateAvailable: Boolean = false,
     val mandatoryUpdate: Boolean = false,
     val downloadUrl: String? = null,
-    val changelog: String = ""
+    val changelog: String = "",
+    val isBanned: Boolean = false,
+    val banReason: String = ""
+)
+
+data class AppPermissionsReport(
+    val notifications: Boolean = false,
+    val contacts: Boolean = false,
+    val installUnknownApps: Boolean = false,
+    val storage: Boolean = false
 )
 
 fun sanitizeMediaUrl(rawUrl: String?): String? {

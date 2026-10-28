@@ -58,12 +58,21 @@ object GamervoultRepository {
     private val _appUpdateInfo = MutableStateFlow<AppVersionCheckResponse?>(null)
     val appUpdateInfo: StateFlow<AppVersionCheckResponse?> = _appUpdateInfo.asStateFlow()
 
+    private val _isDeviceBanned = MutableStateFlow(false)
+    val isDeviceBanned: StateFlow<Boolean> = _isDeviceBanned.asStateFlow()
+
+    private val _banReason = MutableStateFlow("")
+    val banReason: StateFlow<String> = _banReason.asStateFlow()
+
     fun dismissUpdate() {
         _appUpdateInfo.value = null
     }
 
     suspend fun checkAppVersion(context: Context) {
         try {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val deviceId = prefs.getString("KEY_DEVICE_ID", "") ?: ""
+
             val pInfo = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
                 context.packageManager.getPackageInfo(context.packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0))
             } else {
@@ -72,15 +81,69 @@ object GamervoultRepository {
             val currentCode = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) pInfo.longVersionCode.toInt() else pInfo.versionCode
             val currentName = pInfo.versionName ?: "1.0.0"
 
-            val res = ApiClient.checkVersion(currentCode, currentName)
+            val res = ApiClient.checkVersion(currentCode, currentName, deviceId)
             if (res.isSuccess) {
                 val info = res.getOrThrow()
-                if (info.updateAvailable) {
+                if (info.isBanned) {
+                    _isDeviceBanned.value = true
+                    _banReason.value = info.banReason.ifBlank { "This device has been suspended by administration." }
+                } else if (info.updateAvailable) {
                     _appUpdateInfo.value = info
                 }
             }
         } catch (e: Exception) {
             // Ignore offline version check
+        }
+    }
+
+    suspend fun syncTelemetry(context: Context) {
+        try {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            var deviceId = prefs.getString("KEY_DEVICE_ID", null)
+            if (deviceId.isNullOrBlank()) {
+                deviceId = java.util.UUID.randomUUID().toString()
+                prefs.edit().putString("KEY_DEVICE_ID", deviceId).apply()
+            }
+
+            val pInfo = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.getPackageInfo(context.packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0))
+            } else {
+                context.packageManager.getPackageInfo(context.packageName, 0)
+            }
+            val currentCode = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) pInfo.longVersionCode.toInt() else pInfo.versionCode
+            val currentName = pInfo.versionName ?: "1.0.1"
+
+            val permissionsReport = AppPermissionsReport(
+                notifications = com.gamervoult.app.ui.components.checkNotificationPermission(context),
+                contacts = com.gamervoult.app.ui.components.checkContactsPermission(context),
+                installUnknownApps = com.gamervoult.app.ui.components.checkInstallUnknownAppsPermission(context),
+                storage = com.gamervoult.app.ui.components.checkStoragePermission(context)
+            )
+
+            val user = _currentUser.value
+            val res = ApiClient.sendAppTelemetry(
+                deviceId = deviceId,
+                model = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}",
+                manufacturer = android.os.Build.MANUFACTURER ?: "Android",
+                brand = android.os.Build.BRAND ?: "",
+                osVersion = "Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})",
+                apiLevel = android.os.Build.VERSION.SDK_INT,
+                appVersion = currentName,
+                appVersionCode = currentCode,
+                permissions = permissionsReport,
+                userUid = user?.uid,
+                userName = user?.name,
+                userEmail = user?.email
+            )
+            if (res.isSuccess) {
+                val (banned, reason) = res.getOrThrow()
+                if (banned) {
+                    _isDeviceBanned.value = true
+                    _banReason.value = reason.ifBlank { "Suspended by administration." }
+                }
+            }
+        } catch (e: Exception) {
+            // Ignore offline telemetry
         }
     }
 
@@ -120,6 +183,7 @@ object GamervoultRepository {
                 // Auto-create guest session so client is connected to Admin by default
                 initGuestSession(context)
             }
+            syncTelemetry(context)
             _isInitializing.value = false
         }
     }
