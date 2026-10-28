@@ -326,9 +326,6 @@ router.get('/api/v1/orders', verifyFirebaseAuth, async (req, res) => {
     return res.status(500).json({ success: false, error: 'Failed to retrieve orders.' });
   }
 });
-    return res.status(500).json({ success: false, error: 'Failed to create payment order.' });
-  }
-});
 
 // =========================================================================
 // 5. Order Status Lookup & Gateway Polling
