@@ -62,6 +62,21 @@ export async function verifyFirebaseAuth(req, res, next) {
   }
 
   const idToken = authHeader.split('Bearer ')[1].trim();
+
+  // Development Mock/Test Token Handler (strictly disabled in production)
+  if (process.env.NODE_ENV !== 'production' && process.env.ALLOW_DEV_TOKENS === 'true' && (idToken.startsWith('dev_token:') || idToken.startsWith('dev_token_'))) {
+    const parts = idToken.includes(':') ? idToken.split(':') : idToken.split('_');
+    const devUid = parts[1] || 'dev_user';
+    const devRole = parts[2] || 'client';
+    req.uid = devUid;
+    req.user = { uid: devUid, email: `${devUid}@gamervoult.dev`, role: devRole, name: `Player ${devUid}` };
+    req.userRole = devRole;
+    req.isStaff = ['staff', 'employee', 'admin', 'superadmin'].includes(devRole);
+    req.isAdmin = ['admin', 'superadmin'].includes(devRole);
+    req.isSuperAdmin = devRole === 'superadmin';
+    return next();
+  }
+
   const { auth, db } = getFirebaseAdmin();
 
   if (!auth) {

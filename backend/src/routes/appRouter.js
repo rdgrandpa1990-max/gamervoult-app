@@ -182,13 +182,19 @@ router.post('/api/v1/orders/create', orderCreateLimiter, async (req, res) => {
     let userId = req.body.userId ? String(req.body.userId).trim() : null;
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
-      try {
-        const { auth } = getFirebaseAdmin();
-        if (auth) {
-          const decoded = await auth.verifyIdToken(authHeader.split('Bearer ')[1].trim());
-          userId = decoded.uid;
-        }
-      } catch {}
+      const token = authHeader.split('Bearer ')[1].trim();
+      if (process.env.NODE_ENV !== 'production' && process.env.ALLOW_DEV_TOKENS === 'true' && (token.startsWith('dev_token:') || token.startsWith('dev_token_'))) {
+        const parts = token.includes(':') ? token.split(':') : token.split('_');
+        userId = parts[1];
+      } else {
+        try {
+          const { auth } = getFirebaseAdmin();
+          if (auth) {
+            const decoded = await auth.verifyIdToken(token);
+            userId = decoded.uid;
+          }
+        } catch {}
+      }
     }
 
     // 1. Authoritative Server Catalog Lookup
@@ -249,6 +255,8 @@ router.post('/api/v1/orders/create', orderCreateLimiter, async (req, res) => {
       currency: 'INR',
       status: 'PENDING',
       itemTitle: orderPayload.itemTitle,
+      paymentMode: process.env.LIVE_PAYMENTS_ENABLED === 'true' ? 'LIVE' : 'TEST_SANDBOX_ONLY',
+      livePaymentsEnabled: process.env.LIVE_PAYMENTS_ENABLED === 'true',
       paymentInstructions: {
         gatewayUrl: (process.env.UPI_GATEWAY_URL || 'https://personal-payment-gateway.onrender.com').replace(/\/+$/, ''),
         orderCode
@@ -427,7 +435,7 @@ router.post('/api/webhooks/payment', webhookLimiter, async (req, res) => {
                          process.env.PAYMENT_GATEWAY_WEBHOOK_SECRET || 
                          process.env.UPI_GATEWAY_API_KEY || '';
 
-  let incomingSecret = req.headers['x-webhook-secret'] || req.headers['x-api-key'] || '';
+  let incomingSecret = req.headers['x-webhook-secret'] || req.headers['x-api-key'] || req.query?.secret || '';
   if (!incomingSecret && req.headers['authorization']) {
     const authHeader = String(req.headers['authorization']).trim();
     incomingSecret = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader;
@@ -444,7 +452,17 @@ router.post('/api/webhooks/payment', webhookLimiter, async (req, res) => {
     return res.status(401).json({ success: false, error: 'Unauthorized: Invalid or missing webhook secret.' });
   }
 
-  const { orderCode, status, utr, transactionId, amount, currency } = req.body;
+  // Handle both flat payload and nested { event, data: { ... } } format from UPI Gateway
+  const payloadData = (req.body && typeof req.body.data === 'object' && req.body.data !== null) 
+    ? req.body.data 
+    : (req.body || {});
+
+  const orderCode = payloadData.orderCode || req.body?.orderCode;
+  const status = payloadData.status || req.body?.status;
+  const utr = payloadData.utr || req.body?.utr;
+  const transactionId = payloadData.transactionId || req.body?.transactionId;
+  const amount = payloadData.amount !== undefined ? payloadData.amount : req.body?.amount;
+  const currency = payloadData.currency || req.body?.currency;
 
   if (!orderCode || !status) {
     return res.status(400).json({ success: false, error: 'Missing required webhook fields: orderCode, status' });
@@ -522,6 +540,58 @@ router.post('/api/webhooks/payment', webhookLimiter, async (req, res) => {
         });
       }
 
+      // 4b. Independent Transaction Verification with Payment Gateway
+      // A caller-provided UTR alone is not payment proof. When gateway verification is configured,
+      // verify the authoritative state directly with the payment gateway server.
+      if (process.env.INDEPENDENT_GATEWAY_VERIFICATION === 'true' && process.env.UPI_GATEWAY_URL) {
+        try {
+          const gwUrl = process.env.UPI_GATEWAY_URL.replace(/\/+$/, '');
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 6000);
+          const gwVerifyRes = await fetch(`${gwUrl}/api/v1/orders/${cleanOrderCode}`, {
+            headers: { 'x-api-key': process.env.UPI_GATEWAY_API_KEY || '' },
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+
+          if (!gwVerifyRes.ok) {
+            console.error(`[Webhook] Independent gateway check failed with HTTP ${gwVerifyRes.status}`);
+            return res.status(400).json({
+              success: false,
+              error: 'GATEWAY_VERIFICATION_FAILED',
+              message: 'UPI Payment Gateway does not confirm this transaction.'
+            });
+          }
+
+          const gwOrderData = await gwVerifyRes.json();
+          const gwOrder = gwOrderData.order || gwOrderData;
+          if (!gwOrder || gwOrder.status !== 'PAID') {
+            console.error(`[Webhook] Gateway verification rejected: Gateway status is '${gwOrder?.status}' (expected 'PAID')`);
+            return res.status(400).json({
+              success: false,
+              error: 'GATEWAY_NOT_PAID',
+              message: 'UPI Gateway confirms order is not in PAID state.'
+            });
+          }
+
+          if (Number(gwOrder.amount) !== Number(currentOrder.amount)) {
+            console.error(`[Webhook] Gateway verification rejected: Amount mismatch ₹${gwOrder.amount} vs expected ₹${currentOrder.amount}`);
+            return res.status(400).json({
+              success: false,
+              error: 'GATEWAY_AMOUNT_MISMATCH',
+              message: 'UPI Gateway recorded amount does not match authoritative order amount.'
+            });
+          }
+        } catch (gwErr) {
+          console.error('[Webhook] Gateway verification connection error:', gwErr.message);
+          return res.status(502).json({
+            success: false,
+            error: 'GATEWAY_UNREACHABLE',
+            message: 'Unable to reach UPI Gateway for independent transaction confirmation.'
+          });
+        }
+      }
+
       await orderRef.update({
         status: 'PAID',
         paidAt: new Date().toISOString(),
@@ -547,9 +617,9 @@ router.post('/api/webhooks/payment', webhookLimiter, async (req, res) => {
 });
 
 // =========================================================================
-// 7. Post-Payment Authoritative Credential Release
+// 7. Post-Payment Authoritative Credential Release (GET & POST)
 // =========================================================================
-router.post('/api/v1/orders/:orderCode/credentials', verifyFirebaseAuth, async (req, res) => {
+const credentialsReleaseHandler = async (req, res) => {
   const { db } = getFirebaseAdmin();
   if (!db) return res.status(503).json({ success: false, error: 'Database service unavailable' });
 
@@ -573,7 +643,7 @@ router.post('/api/v1/orders/:orderCode/credentials', verifyFirebaseAuth, async (
     }
 
     // 2. Ownership check: Must be buyer or staff
-    const isOwner = req.uid === order.userId || (order.customerEmail && req.user.email === order.customerEmail);
+    const isOwner = req.uid === order.userId || (order.customerEmail && req.user?.email === order.customerEmail);
     if (!isOwner && !req.isStaff) {
       return res.status(403).json({
         success: false,
@@ -614,7 +684,10 @@ router.post('/api/v1/orders/:orderCode/credentials', verifyFirebaseAuth, async (
     console.error('[Credentials] Release error:', err.message);
     return res.status(500).json({ success: false, error: 'Failed to retrieve delivery credentials.' });
   }
-});
+};
+
+router.get('/api/v1/orders/:orderCode/credentials', verifyFirebaseAuth, credentialsReleaseHandler);
+router.post('/api/v1/orders/:orderCode/credentials', verifyFirebaseAuth, credentialsReleaseHandler);
 
 // =========================================================================
 // 8. User Profile & Subscription Status (/api/v1/me)
@@ -634,7 +707,7 @@ router.get('/api/v1/me', verifyFirebaseAuth, async (req, res) => {
       success: true,
       user: {
         uid: req.uid,
-        email: req.user.email || userData.email || '',
+        email: userData.email || req.user.email || '',
         name: userData.name || req.user.name || 'Gamervoult Player',
         role: req.userRole,
         status: userData.status || 'Active',

@@ -15,8 +15,19 @@ export function getFirebaseAdmin() {
   }
 
   try {
+    // 0. Development Firestore Emulator Support (Strictly Isolated & Non-Production)
+    if (process.env.FIRESTORE_EMULATOR_HOST) {
+      const devProjectId = process.env.FIREBASE_PROJECT_ID || 'gamervoult-dev';
+      if (devProjectId === 'ff-store-4a61e') {
+        throw new Error('FATAL: Cannot use production project ID (ff-store-4a61e) with development emulator.');
+      }
+      admin.initializeApp({
+        projectId: devProjectId
+      });
+      console.log(`✅ [Firebase] Initialized with isolated development Firestore emulator at ${process.env.FIRESTORE_EMULATOR_HOST} (Project: ${devProjectId})`);
+    }
     // 1. Environment Variable Credentials (Preferred on Vercel)
-    if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
+    else if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
       const privateKey = process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n');
       admin.initializeApp({
         credential: admin.credential.cert({
