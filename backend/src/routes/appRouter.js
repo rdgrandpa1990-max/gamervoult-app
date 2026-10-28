@@ -545,50 +545,158 @@ router.get('/api/v1/app/version-check', async (req, res) => {
 });
 
 // =========================================================================
-// 3. Storefront Products Catalog (/api/v1/products)
+// 3. Storefront Products Catalog (/api/v1/products) - Live Website Synchronization
 // =========================================================================
 router.get('/api/v1/products', async (req, res) => {
   try {
-    const { db } = getFirebaseAdmin();
-    if (!db) return res.status(503).json({ success: false, error: 'Database service unavailable' });
-
-    const snap = await db.collection('ff_store').limit(100).get();
     const products = [];
+    let fetchedFromProd = false;
 
-    snap.forEach(doc => {
-      const data = doc.data();
-      if (data.status !== 'deleted' && data.status !== 'archived') {
-        const rawMediaList = Array.isArray(data.mediaList) && data.mediaList.length > 0
-          ? data.mediaList.map(m => typeof m === 'string' ? { url: m, type: 'image' } : m)
-          : (data.mediaUrl ? [{ url: data.mediaUrl, type: data.mediaType || 'image' }] : []);
-        const primaryMedia = rawMediaList[0]?.url || data.imageUrl || null;
-
-        const title = data.title || data.name || data.description || 'Free Fire Account';
-        products.push({
-          id: doc.id,
-          title: title,
-          price: Number(data.price) || 0,
-          originalPrice: data.originalPrice ? Number(data.originalPrice) : null,
-          category: data.category || (data.rank ? `Rank: ${data.rank}` : 'Free Fire'),
-          description: data.description || '',
-          mediaUrl: primaryMedia,
-          mediaList: rawMediaList,
-          images: rawMediaList.map(m => m.url).filter(Boolean),
-          badge: data.badge || null,
-          level: data.level ? Number(data.level) : null,
-          evoGuns: data.evoGuns !== undefined ? Number(data.evoGuns) : null,
-          likes: data.likes ? Number(data.likes) : null,
-          characters: Array.isArray(data.characters) ? data.characters : [],
-          rank: data.rank || null,
-          skinsCount: data.skinsCount ? Number(data.skinsCount) : null,
-          isSold: data.status === 'sold' || data.isSold === true,
-          status: data.status || 'active',
-          accountUid: data.accountUid || null,
-          deliveryMode: data.deliveryMode || 'contact_seller',
-          updatedAt: data.updatedAt || new Date().toISOString()
-        });
+    // Helper to extract values from Firestore REST API JSON format
+    const parseFirestoreVal = (v) => {
+      if (!v) return null;
+      if (v.stringValue !== undefined) return v.stringValue;
+      if (v.integerValue !== undefined) return parseInt(v.integerValue, 10);
+      if (v.doubleValue !== undefined) return parseFloat(v.doubleValue);
+      if (v.booleanValue !== undefined) return v.booleanValue;
+      if (v.arrayValue && v.arrayValue.values) return v.arrayValue.values.map(parseFirestoreVal);
+      if (v.mapValue && v.mapValue.fields) {
+        const obj = {};
+        for (const [k, subV] of Object.entries(v.mapValue.fields)) {
+          obj[k] = parseFirestoreVal(subV);
+        }
+        return obj;
       }
-    });
+      return null;
+    };
+
+    // 1. Live Fetch directly from Website Production Database (ff-store-4a61e)
+    try {
+      const prodRes = await fetch('https://firestore.googleapis.com/v1/projects/ff-store-4a61e/databases/(default)/documents/ff_store?pageSize=100');
+      if (prodRes.ok) {
+        const prodData = await prodRes.json();
+        const docs = prodData.documents || [];
+
+        docs.forEach(docItem => {
+          const id = docItem.name.split('/').pop();
+          const f = docItem.fields || {};
+
+          const rawMediaList = [];
+          if (f.mediaList && f.mediaList.arrayValue && f.mediaList.arrayValue.values) {
+            f.mediaList.arrayValue.values.forEach(v => {
+              const parsed = parseFirestoreVal(v);
+              if (parsed) rawMediaList.push(typeof parsed === 'string' ? { url: parsed, type: 'image' } : parsed);
+            });
+          } else if (f.mediaUrl) {
+            const mUrl = f.mediaUrl.stringValue;
+            if (mUrl) rawMediaList.push({ url: mUrl, type: (f.mediaType ? f.mediaType.stringValue : 'image') });
+          }
+
+          // Pick first non-youtube image as primary thumbnail
+          let primaryMedia = null;
+          for (const m of rawMediaList) {
+            if (m.url && !m.url.includes('youtube') && !m.url.includes('youtu.be')) {
+              primaryMedia = m.url;
+              break;
+            }
+          }
+          if (!primaryMedia) {
+            primaryMedia = (f.mediaUrl ? f.mediaUrl.stringValue : null) || (rawMediaList[0] ? rawMediaList[0].url : null);
+          }
+
+          // Gather all image URLs for the full gallery photo viewer
+          const allImages = rawMediaList
+            .map(m => m.url)
+            .filter(u => u && !u.includes('youtube') && !u.includes('youtu.be'));
+
+          if (primaryMedia && !allImages.includes(primaryMedia)) {
+            allImages.unshift(primaryMedia);
+          }
+
+          const title = (f.title ? f.title.stringValue : '') || (f.name ? f.name.stringValue : 'Free Fire Account');
+          const price = f.price ? (f.price.integerValue ? parseInt(f.price.integerValue, 10) : (f.price.doubleValue ? parseFloat(f.price.doubleValue) : Number(f.price.stringValue) || 0)) : 0;
+          const origPrice = f.originalPrice ? (f.originalPrice.integerValue ? parseInt(f.originalPrice.integerValue, 10) : Number(f.originalPrice.stringValue) || null) : null;
+          const level = f.level ? (f.level.integerValue ? parseInt(f.level.integerValue, 10) : Number(f.level.stringValue) || null) : null;
+          const evoGuns = f.evoGuns ? (f.evoGuns.integerValue ? parseInt(f.evoGuns.integerValue, 10) : Number(f.evoGuns.stringValue) || 0) : null;
+          const rank = f.rank ? f.rank.stringValue : null;
+          const desc = f.description ? f.description.stringValue : '';
+          const accountUid = f.accountUid ? f.accountUid.stringValue : null;
+          const deliveryMode = f.deliveryMode ? f.deliveryMode.stringValue : 'contact_seller';
+          const createdAt = f.createdAt ? f.createdAt.stringValue : (docItem.createTime || new Date().toISOString());
+
+          products.push({
+            id,
+            title,
+            price,
+            originalPrice: origPrice,
+            category: rank ? `Rank: ${rank}` : 'Free Fire',
+            description: desc,
+            mediaUrl: primaryMedia,
+            mediaList: rawMediaList,
+            images: allImages,
+            badge: f.badge ? f.badge.stringValue : null,
+            level,
+            evoGuns,
+            likes: f.likes ? Number(f.likes.integerValue || 0) : null,
+            characters: (f.characters && f.characters.arrayValue && f.characters.arrayValue.values) ? f.characters.arrayValue.values.map(parseFirestoreVal) : [],
+            rank,
+            skinsCount: f.skinsCount ? Number(f.skinsCount.integerValue || 0) : null,
+            isSold: false,
+            status: 'active',
+            accountUid,
+            deliveryMode,
+            createdAt
+          });
+        });
+
+        products.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        fetchedFromProd = true;
+      }
+    } catch (restErr) {
+      console.warn('[Products] Live REST sync note:', restErr.message);
+    }
+
+    // 2. Fallback to Dev Firestore if live REST was unreachable
+    if (!fetchedFromProd || products.length === 0) {
+      const { db } = getFirebaseAdmin();
+      if (db) {
+        const snap = await db.collection('ff_store').limit(100).get();
+        snap.forEach(doc => {
+          const data = doc.data();
+          if (data.status !== 'deleted' && data.status !== 'archived') {
+            const rawMediaList = Array.isArray(data.mediaList) && data.mediaList.length > 0
+              ? data.mediaList.map(m => typeof m === 'string' ? { url: m, type: 'image' } : m)
+              : (data.mediaUrl ? [{ url: data.mediaUrl, type: data.mediaType || 'image' }] : []);
+            const primaryMedia = rawMediaList[0]?.url || data.imageUrl || null;
+            const title = data.title || data.name || data.description || 'Free Fire Account';
+            products.push({
+              id: doc.id,
+              title: title,
+              price: Number(data.price) || 0,
+              originalPrice: data.originalPrice ? Number(data.originalPrice) : null,
+              category: data.category || (data.rank ? `Rank: ${data.rank}` : 'Free Fire'),
+              description: data.description || '',
+              mediaUrl: primaryMedia,
+              mediaList: rawMediaList,
+              images: rawMediaList.map(m => m.url).filter(Boolean),
+              badge: data.badge || null,
+              level: data.level ? Number(data.level) : null,
+              evoGuns: data.evoGuns !== undefined ? Number(data.evoGuns) : null,
+              likes: data.likes ? Number(data.likes) : null,
+              characters: Array.isArray(data.characters) ? data.characters : [],
+              rank: data.rank || null,
+              skinsCount: data.skinsCount ? Number(data.skinsCount) : null,
+              isSold: data.status === 'sold' || data.isSold === true,
+              status: data.status || 'active',
+              accountUid: data.accountUid || null,
+              deliveryMode: data.deliveryMode || 'contact_seller',
+              createdAt: data.createdAt || new Date().toISOString()
+            });
+          }
+        });
+        products.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      }
+    }
 
     return res.status(200).json({
       success: true,

@@ -54,6 +54,7 @@ fun ExploreScreen() {
     var showSortMenu by remember { mutableStateOf(false) }
 
     var selectedProductForBuy by remember { mutableStateOf<ProductItem?>(null) }
+    var selectedProductForDetail by remember { mutableStateOf<ProductItem?>(null) }
     var currentOrderResult by remember { mutableStateOf<OrderItem?>(null) }
     var isPlacingOrder by remember { mutableStateOf(false) }
 
@@ -272,9 +273,22 @@ fun ExploreScreen() {
             items(filteredList) { item ->
                 ProductGridCard(
                     product = item,
+                    onCardClick = { selectedProductForDetail = item },
                     onBuyClick = { selectedProductForBuy = item }
                 )
             }
+        }
+
+        // Account Full Photo & Specs Viewer Dialog (Triggered when clicking ANY ID)
+        selectedProductForDetail?.let { prod ->
+            ProductDetailPhotoDialog(
+                product = prod,
+                onDismiss = { selectedProductForDetail = null },
+                onBuyClick = {
+                    selectedProductForDetail = null
+                    selectedProductForBuy = prod
+                }
+            )
         }
 
         // UPI Payment Gateway Checkout Dialog

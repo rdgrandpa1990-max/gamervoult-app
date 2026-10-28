@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -35,6 +36,8 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -57,6 +60,7 @@ fun HomeScreen(
 
     var selectedCategory by remember { mutableStateOf("All IDs") }
     var selectedProductForBuy by remember { mutableStateOf<ProductItem?>(null) }
+    var selectedProductForDetail by remember { mutableStateOf<ProductItem?>(null) }
     var currentOrderResult by remember { mutableStateOf<OrderItem?>(null) }
     var isPlacingOrder by remember { mutableStateOf(false) }
 
@@ -324,9 +328,22 @@ fun HomeScreen(
             items(filteredProducts) { item ->
                 ProductGridCard(
                     product = item,
+                    onCardClick = { selectedProductForDetail = item },
                     onBuyClick = { selectedProductForBuy = item }
                 )
             }
+        }
+
+        // 6b. ACCOUNT FULL PHOTO & SPECS VIEWER DIALOG (Triggered when user clicks ANY ID)
+        selectedProductForDetail?.let { prod ->
+            ProductDetailPhotoDialog(
+                product = prod,
+                onDismiss = { selectedProductForDetail = null },
+                onBuyClick = {
+                    selectedProductForDetail = null
+                    selectedProductForBuy = prod
+                }
+            )
         }
 
         // 7. UPI PAYMENT GATEWAY DIALOG (Triggered when user taps Buy)
@@ -582,6 +599,7 @@ fun PromoHeroCard(
 @Composable
 fun ProductGridCard(
     product: ProductItem,
+    onCardClick: () -> Unit = {},
     onBuyClick: () -> Unit
 ) {
     val context = LocalContext.current
@@ -592,7 +610,7 @@ fun ProductGridCard(
         border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder),
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onBuyClick)
+            .clickable(onClick = onCardClick)
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             // 1. TOP PHOTO WITH BADGES (16:9 Aspect Ratio)
@@ -650,6 +668,24 @@ fun ProductGridCard(
                             Text("🔥 RARE OG", color = Color(0xFF1F2937), fontSize = 8.5.sp, fontWeight = FontWeight.Black)
                         }
                     }
+                }
+
+                // Bottom-Right Pill: Photo count
+                val photoCount = product.images.size.coerceAtLeast(1)
+                Surface(
+                    color = Color.Black.copy(alpha = 0.7f),
+                    shape = RoundedCornerShape(6.dp),
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(6.dp)
+                ) {
+                    Text(
+                        text = "📷 $photoCount Photos",
+                        color = Color.White,
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                    )
                 }
             }
 
@@ -746,6 +782,333 @@ fun ProductGridCard(
                         Text("Buy", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
                     }
                 }
+            }
+        }
+    }
+}
+
+// =========================================================================
+// 8. FULL PHOTO & SPECIFICATIONS VIEWER DIALOG
+// =========================================================================
+@Composable
+fun ProductDetailPhotoDialog(
+    product: ProductItem,
+    onDismiss: () -> Unit,
+    onBuyClick: () -> Unit
+) {
+    val context = LocalContext.current
+    val allImages = remember(product) {
+        val list = mutableListOf<String>()
+        if (!product.mediaUrl.isNullOrBlank()) list.add(product.mediaUrl)
+        product.images.forEach { img ->
+            if (img.isNotBlank() && !list.contains(img)) {
+                list.add(img)
+            }
+        }
+        if (list.isEmpty()) {
+            list.add("https://res.cloudinary.com/dolc2kuyx/image/upload/v1793185282/IMG_4229_yz1sgb.png")
+        }
+        list
+    }
+
+    var currentPhotoIndex by remember { mutableStateOf(0) }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(DarkBackground),
+            color = DarkBackground
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp)
+            ) {
+                // Top Header: Title + Close Button
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = product.title,
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 18.sp,
+                            lineHeight = 22.sp
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.padding(top = 4.dp)
+                        ) {
+                            Surface(
+                                color = AccentEmerald.copy(alpha = 0.15f),
+                                shape = RoundedCornerShape(6.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, AccentEmerald.copy(alpha = 0.4f))
+                            ) {
+                                Text(
+                                    text = "100% ESCROW VERIFIED",
+                                    color = AccentEmerald,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Black,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                            if (!product.accountUid.isNullOrBlank()) {
+                                Text(
+                                    text = "UID: ${product.accountUid}",
+                                    color = TextMuted,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(DarkSurface)
+                            .border(1.dp, DarkBorder, CircleShape)
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = TextPrimary, modifier = Modifier.size(20.dp))
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // 2. MAIN FULL-SIZE PHOTO PREVIEW
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(280.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Color.Black)
+                        .border(1.dp, DarkBorder, RoundedCornerShape(18.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(context)
+                            .data(allImages.getOrNull(currentPhotoIndex))
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = "Full Account Photo",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    // Photo Counter Badge
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.75f),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(10.dp)
+                    ) {
+                        Text(
+                            text = "Photo ${currentPhotoIndex + 1} of ${allImages.size}",
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+
+                    // Left Nav Arrow
+                    if (allImages.size > 1 && currentPhotoIndex > 0) {
+                        IconButton(
+                            onClick = { currentPhotoIndex-- },
+                            modifier = Modifier
+                                .align(Alignment.CenterStart)
+                                .padding(8.dp)
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.6f))
+                        ) {
+                            Icon(Icons.Default.ChevronLeft, contentDescription = "Previous", tint = Color.White)
+                        }
+                    }
+
+                    // Right Nav Arrow
+                    if (allImages.size > 1 && currentPhotoIndex < allImages.size - 1) {
+                        IconButton(
+                            onClick = { currentPhotoIndex++ },
+                            modifier = Modifier
+                                .align(Alignment.CenterEnd)
+                                .padding(8.dp)
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.6f))
+                        ) {
+                            Icon(Icons.Default.ChevronRight, contentDescription = "Next", tint = Color.White)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // 3. HORIZONTAL THUMBNAILS GALLERY (Tap any thumbnail to see it)
+                if (allImages.size > 1) {
+                    Text(
+                        text = "All Account Photos (${allImages.size})",
+                        color = TextSecondary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(bottom = 6.dp)
+                    )
+
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        itemsIndexed(allImages) { idx, imgUrl ->
+                            val isSelected = idx == currentPhotoIndex
+                            Box(
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(DarkSurface)
+                                    .border(
+                                        width = if (isSelected) 2.dp else 1.dp,
+                                        color = if (isSelected) PrimaryIndigoLight else DarkBorder,
+                                        shape = RoundedCornerShape(10.dp)
+                                    )
+                                    .clickable { currentPhotoIndex = idx }
+                            ) {
+                                AsyncImage(
+                                    model = ImageRequest.Builder(context).data(imgUrl).crossfade(true).build(),
+                                    contentDescription = "Thumbnail",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // 4. PRICE & SPECIFICATIONS CARD
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text("Escrow Purchase Price", color = TextMuted, fontSize = 11.sp)
+                                Text("₹${product.price}", color = AccentEmerald, fontSize = 24.sp, fontWeight = FontWeight.Black)
+                            }
+
+                            Surface(
+                                color = PrimaryIndigo.copy(alpha = 0.2f),
+                                shape = RoundedCornerShape(8.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, PrimaryIndigo.copy(alpha = 0.4f))
+                            ) {
+                                Text(
+                                    text = "SAFE 2-WAY ESCROW",
+                                    color = PrimaryIndigoLight,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Black,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+
+                        HorizontalDivider(color = DarkBorder)
+
+                        // Specification Chips
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Surface(color = DarkCardElevated, shape = RoundedCornerShape(6.dp)) {
+                                Text("Level: ${product.level ?: 60}", color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                            }
+                            Surface(color = DarkCardElevated, shape = RoundedCornerShape(6.dp)) {
+                                Text("Rank: ${product.rank ?: "Heroic"}", color = PrimaryIndigoLight, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                            }
+                            if (product.evoGuns != null && product.evoGuns > 0) {
+                                Surface(color = DarkCardElevated, shape = RoundedCornerShape(6.dp)) {
+                                    Text("⚡ ${product.evoGuns} Evo Guns", color = AccentAmber, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                                }
+                            }
+                            if (product.skinsCount != null && product.skinsCount > 0) {
+                                Surface(color = DarkCardElevated, shape = RoundedCornerShape(6.dp)) {
+                                    Text("${product.skinsCount} Skins", color = TextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                                }
+                            }
+                        }
+
+                        // Description
+                        if (product.description.isNotBlank()) {
+                            Text(
+                                text = product.description,
+                                color = TextSecondary,
+                                fontSize = 12.sp,
+                                lineHeight = 17.sp,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(18.dp))
+
+                // 5. ACTION BUTTONS: Instant Buy via UPI + WhatsApp Handover
+                Button(
+                    onClick = onBuyClick,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text("Instant Buy (UPI) — ₹${product.price}", color = Color.White, fontWeight = FontWeight.Black, fontSize = 14.sp)
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                OutlinedButton(
+                    onClick = {
+                        try {
+                            val msg = "Hello, I want to inspect and purchase this Free Fire Account from GamerVault Store:\nID: ${product.title}\nPrice: ₹${product.price}\nRef: ${product.id}"
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/918855520129?text=${Uri.encode(msg)}"))
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "WhatsApp Desk: +91 88555 20129", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(46.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, WhatsAppGreen)
+                ) {
+                    Icon(Icons.Default.Phone, contentDescription = null, tint = WhatsAppGreen, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Contact Support on WhatsApp", color = WhatsAppGreen, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
             }
         }
     }
