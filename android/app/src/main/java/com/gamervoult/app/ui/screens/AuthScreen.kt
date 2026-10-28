@@ -66,7 +66,48 @@ fun AuthScreen(
     var dpdpConsent by remember { mutableStateOf(true) }
     var isLicenseSubmitting by remember { mutableStateOf(false) }
 
-    // Native Google Sign-In Setup
+    // Native System Google Account Chooser
+    val systemAccountLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        isGoogleLoading = false
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            val selectedEmail = result.data?.getStringExtra(android.accounts.AccountManager.KEY_ACCOUNT_NAME)
+            if (!selectedEmail.isNullOrBlank()) {
+                val chosenName = selectedEmail.substringBefore("@")
+                    .replace(".", " ")
+                    .replace("_", " ")
+                    .split(" ")
+                    .filter { it.isNotBlank() }
+                    .joinToString(" ") { part -> part.replaceFirstChar { c -> c.uppercase() } }
+
+                coroutineScope.launch {
+                    isGoogleLoading = true
+                    errorMessage = null
+                    try {
+                        val res = GamervoultRepository.loginWithGoogle(
+                            context = context,
+                            email = selectedEmail,
+                            name = chosenName.ifBlank { "Gamer" },
+                            photoUrl = null
+                        )
+                        if (res.isSuccess) {
+                            Toast.makeText(context, "Welcome, $chosenName!", Toast.LENGTH_SHORT).show()
+                            onAuthSuccess()
+                        } else {
+                            errorMessage = res.exceptionOrNull()?.message ?: "Google sign-in failed"
+                        }
+                    } catch (e: Exception) {
+                        errorMessage = "Sign-in error: ${e.message}"
+                    } finally {
+                        isGoogleLoading = false
+                    }
+                }
+            }
+        }
+    }
+
+    // Secondary Play Services Google Sign-In Fallback
     val gso = remember {
         GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
@@ -78,8 +119,8 @@ fun AuthScreen(
     val googleLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            try {
+        try {
+            if (result.resultCode == Activity.RESULT_OK && result.data != null) {
                 val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
                 val account = task.getResult(ApiException::class.java)
                 val userEmail = account.email
@@ -90,24 +131,30 @@ fun AuthScreen(
                     coroutineScope.launch {
                         isGoogleLoading = true
                         errorMessage = null
-                        val res = GamervoultRepository.loginWithGoogle(
-                            context = context,
-                            email = userEmail,
-                            name = userName,
-                            photoUrl = photoUrl
-                        )
-                        isGoogleLoading = false
-                        if (res.isSuccess) {
-                            Toast.makeText(context, "Welcome back, $userName!", Toast.LENGTH_SHORT).show()
-                            onAuthSuccess()
-                        } else {
-                            errorMessage = res.exceptionOrNull()?.message ?: "Google sign-in failed"
+                        try {
+                            val res = GamervoultRepository.loginWithGoogle(
+                                context = context,
+                                email = userEmail,
+                                name = userName,
+                                photoUrl = photoUrl
+                            )
+                            if (res.isSuccess) {
+                                Toast.makeText(context, "Welcome, $userName!", Toast.LENGTH_SHORT).show()
+                                onAuthSuccess()
+                            } else {
+                                errorMessage = res.exceptionOrNull()?.message ?: "Google sign-in failed"
+                            }
+                        } finally {
+                            isGoogleLoading = false
                         }
                     }
+                    return@rememberLauncherForActivityResult
                 }
-            } catch (e: Exception) {
-                errorMessage = "Google Sign-In: ${e.message}"
             }
+        } catch (e: Exception) {
+            errorMessage = "Google Sign-In: ${e.message}"
+        } finally {
+            isGoogleLoading = false
         }
     }
 
@@ -195,8 +242,27 @@ fun AuthScreen(
                 // 1. Continue with Google Button (Native Google Sign-In)
                 Button(
                     onClick = {
+                        errorMessage = null
                         isGoogleLoading = true
-                        googleLauncher.launch(googleSignInClient.signInIntent)
+                        try {
+                            val intent = android.accounts.AccountManager.newChooseAccountIntent(
+                                null,
+                                null,
+                                arrayOf("com.google"),
+                                null,
+                                null,
+                                null,
+                                null
+                            )
+                            systemAccountLauncher.launch(intent)
+                        } catch (e: Exception) {
+                            try {
+                                googleLauncher.launch(googleSignInClient.signInIntent)
+                            } catch (ex: Exception) {
+                                isGoogleLoading = false
+                                errorMessage = "Google Account picker unavailable."
+                            }
+                        }
                     },
                     modifier = Modifier
                         .fillMaxWidth()

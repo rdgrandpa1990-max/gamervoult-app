@@ -245,7 +245,38 @@ object ApiClient {
                     )
                 )
             }
+            val contactObj = obj.optJSONObject("storeContact")
+            if (contactObj != null) {
+                val wa = contactObj.optString("whatsapp", "+917318211010")
+                val tg = contactObj.optString("telegram", "alexzzzff")
+                val bn = contactObj.optString("brandName", "GAMERVAULT STORE")
+                GamervoultRepository.updateStoreSettings(StoreContactSettings(wa, tg, bn))
+            }
+
             Result.success(list)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // 4b. Live Store Settings & Contact Channels
+    suspend fun getStoreSettings(): Result<StoreContactSettings> = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url("$BASE_URL/api/v1/store/settings")
+                .get()
+                .build()
+            val response = client.newCall(request).execute()
+            val raw = response.body?.string() ?: ""
+            val obj = JSONObject(raw)
+            if (response.isSuccessful && obj.optBoolean("success", false)) {
+                val wa = obj.optString("whatsapp", "+917318211010")
+                val tg = obj.optString("telegram", "alexzzzff")
+                val bn = obj.optString("brandName", "GAMERVAULT STORE")
+                Result.success(StoreContactSettings(wa, tg, bn))
+            } else {
+                Result.failure(Exception("Failed to fetch store settings"))
+            }
         } catch (e: Exception) {
             Result.failure(e)
         }

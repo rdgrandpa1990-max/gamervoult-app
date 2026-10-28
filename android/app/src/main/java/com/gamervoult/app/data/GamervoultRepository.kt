@@ -34,6 +34,21 @@ object GamervoultRepository {
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+    private val _storeSettings = MutableStateFlow(StoreContactSettings())
+    val storeSettings: StateFlow<StoreContactSettings> = _storeSettings.asStateFlow()
+
+    fun updateStoreSettings(settings: StoreContactSettings) {
+        _storeSettings.value = settings
+    }
+
+    suspend fun fetchStoreSettings(): Result<StoreContactSettings> {
+        val res = ApiClient.getStoreSettings()
+        if (res.isSuccess) {
+            _storeSettings.value = res.getOrThrow()
+        }
+        return res
+    }
+
     fun getSessionToken(): String? = sessionToken
 
     fun initSession(context: Context, coroutineScope: CoroutineScope) {
@@ -161,6 +176,7 @@ object GamervoultRepository {
         if (res.isSuccess) {
             _products.value = res.getOrNull() ?: emptyList()
         }
+        fetchStoreSettings()
         return res
     }
 

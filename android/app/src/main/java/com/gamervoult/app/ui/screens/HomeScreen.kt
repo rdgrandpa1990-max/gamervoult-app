@@ -56,7 +56,12 @@ fun HomeScreen(
     val coroutineScope = rememberCoroutineScope()
 
     val products by GamervoultRepository.products.collectAsStateWithLifecycle()
+    val storeSettings by GamervoultRepository.storeSettings.collectAsStateWithLifecycle()
     val isGlobalLoading by GamervoultRepository.isLoading.collectAsStateWithLifecycle()
+
+    val cleanWa = remember(storeSettings.whatsapp) {
+        storeSettings.whatsapp.replace(Regex("[^0-9]"), "").ifBlank { "917318211010" }
+    }
 
     var selectedCategory by remember { mutableStateOf("All IDs") }
     var selectedProductForBuy by remember { mutableStateOf<ProductItem?>(null) }
@@ -157,14 +162,26 @@ fun HomeScreen(
 
                         // Right: Search, WhatsApp & Refresh Action Buttons
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            // WhatsApp Button (Opens official WhatsApp desk)
+                            // Search Button (Navigates to Explore screen)
+                            IconButton(
+                                onClick = onNavigateToExplore,
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(DarkSurface)
+                                    .border(1.dp, DarkBorder, CircleShape)
+                            ) {
+                                Icon(Icons.Default.Search, contentDescription = "Search", tint = TextSecondary, modifier = Modifier.size(18.dp))
+                            }
+
+                            // WhatsApp Button (Opens official real-time WhatsApp desk)
                             IconButton(
                                 onClick = {
                                     try {
-                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/918855520129?text=Hello%20Support,%20I%20am%20browsing%20the%20GamerVault%20Free%20Fire%20Store%20and%20want%20to%20buy%20an%20account."))
+                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/$cleanWa?text=${Uri.encode("Hello Support, I am browsing the GamerVault Free Fire Store and want to buy an account.")}"))
                                         context.startActivity(intent)
                                     } catch (e: Exception) {
-                                        Toast.makeText(context, "WhatsApp Desk: +91 88555 20129", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "WhatsApp Desk: ${storeSettings.whatsapp}", Toast.LENGTH_SHORT).show()
                                     }
                                 },
                                 modifier = Modifier
@@ -1090,11 +1107,12 @@ fun ProductDetailPhotoDialog(
                 OutlinedButton(
                     onClick = {
                         try {
+                            val liveWa = GamervoultRepository.storeSettings.value.whatsapp.replace(Regex("[^0-9]"), "").ifBlank { "917318211010" }
                             val msg = "Hello, I want to inspect and purchase this Free Fire Account from GamerVault Store:\nID: ${product.title}\nPrice: ₹${product.price}\nRef: ${product.id}"
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/918855520129?text=${Uri.encode(msg)}"))
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/$liveWa?text=${Uri.encode(msg)}"))
                             context.startActivity(intent)
                         } catch (e: Exception) {
-                            Toast.makeText(context, "WhatsApp Desk: +91 88555 20129", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "WhatsApp Support: ${GamervoultRepository.storeSettings.value.whatsapp}", Toast.LENGTH_SHORT).show()
                         }
                     },
                     modifier = Modifier

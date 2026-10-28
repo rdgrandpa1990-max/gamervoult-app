@@ -47,6 +47,10 @@ fun ExploreScreen() {
     val coroutineScope = rememberCoroutineScope()
 
     val products by GamervoultRepository.products.collectAsStateWithLifecycle()
+    val storeSettings by GamervoultRepository.storeSettings.collectAsStateWithLifecycle()
+    val cleanWa = remember(storeSettings.whatsapp) {
+        storeSettings.whatsapp.replace(Regex("[^0-9]"), "").ifBlank { "917318211010" }
+    }
 
     var searchQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf("All IDs") }
@@ -103,7 +107,7 @@ fun ExploreScreen() {
             // Header Section (Spans across both columns)
             item(span = { GridItemSpan(2) }) {
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    // Top Bar with Brand & Live Store Title
+                    // Top Bar with Brand & Live Store Title (matching reference Image 2)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -111,55 +115,92 @@ fun ExploreScreen() {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(DarkSurface)
+                                    .border(1.5.dp, PrimaryIndigo.copy(alpha = 0.6f), RoundedCornerShape(12.dp)),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Text(
-                                    text = "GAMERVAULT STORE",
-                                    color = TextPrimary,
-                                    fontWeight = FontWeight.Black,
-                                    fontSize = 17.sp,
-                                    letterSpacing = 0.5.sp
-                                )
-                                Surface(
-                                    color = AccentEmerald.copy(alpha = 0.15f),
-                                    shape = RoundedCornerShape(6.dp),
-                                    border = BorderStroke(1.dp, AccentEmerald.copy(alpha = 0.4f))
+                                Icon(Icons.Default.SportsEsports, contentDescription = "Logo", tint = PrimaryIndigoLight, modifier = Modifier.size(24.dp))
+                            }
+
+                            Column {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
                                     Text(
-                                        text = "LIVE STORE",
-                                        color = AccentEmerald,
-                                        fontSize = 9.sp,
+                                        text = "GAMERVAULT STORE",
+                                        color = TextPrimary,
                                         fontWeight = FontWeight.Black,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        fontSize = 16.sp,
+                                        letterSpacing = 0.5.sp
                                     )
+                                    Surface(
+                                        color = AccentEmerald.copy(alpha = 0.15f),
+                                        shape = RoundedCornerShape(6.dp),
+                                        border = BorderStroke(1.dp, AccentEmerald.copy(alpha = 0.4f))
+                                    ) {
+                                        Text(
+                                            text = "VERIFIED",
+                                            color = AccentEmerald,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Black,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    modifier = Modifier.padding(top = 2.dp)
+                                ) {
+                                    Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(AccentEmerald))
+                                    Text(text = "Live Marketplace", color = TextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
                                 }
                             }
-                            Text(
-                                text = "Public Free Fire Account Marketplace",
-                                color = TextSecondary,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Medium
-                            )
                         }
 
-                        // Refresh Button
-                        IconButton(
-                            onClick = {
-                                coroutineScope.launch {
-                                    GamervoultRepository.fetchProducts()
-                                    Toast.makeText(context, "Public store synced", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(DarkSurface)
-                                .border(1.dp, DarkBorder, CircleShape)
-                        ) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Sync", tint = TextSecondary, modifier = Modifier.size(18.dp))
+                        // Right: Live WhatsApp Desk + Sync Buttons
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = {
+                                    try {
+                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/$cleanWa?text=${Uri.encode("Hello Support, I am browsing the GamerVault Explore Store.")}"))
+                                        context.startActivity(intent)
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "WhatsApp: ${storeSettings.whatsapp}", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(WhatsAppGreen)
+                            ) {
+                                Icon(Icons.Default.Phone, contentDescription = "WhatsApp", tint = Color.White, modifier = Modifier.size(17.dp))
+                            }
+
+                            IconButton(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        GamervoultRepository.fetchProducts()
+                                        Toast.makeText(context, "Catalog updated", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(DarkSurface)
+                                    .border(1.dp, DarkBorder, CircleShape)
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = "Sync", tint = TextSecondary, modifier = Modifier.size(17.dp))
+                            }
                         }
                     }
 

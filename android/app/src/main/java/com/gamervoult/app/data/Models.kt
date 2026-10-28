@@ -91,3 +91,9 @@ data class AppVersionInfo(
     val isArtifactAvailable: Boolean = false,
     val changelog: String = ""
 )
+
+data class StoreContactSettings(
+    val whatsapp: String = "+917318211010",
+    val telegram: String = "alexzzzff",
+    val brandName: String = "GAMERVAULT STORE"
+)

@@ -357,13 +357,10 @@ router.post('/api/v1/auth/google', authLimiter, async (req, res) => {
 });
 
 // =========================================================================
-// 0b. Login Endpoint (/api/v1/auth/login)
+// 0b. Login Endpoint (/api/v1/auth/login) - Real-Time Website Sync with Firebase Auth
 // =========================================================================
 router.post('/api/v1/auth/login', authLimiter, async (req, res) => {
   try {
-    const { db } = getFirebaseAdmin();
-    if (!db) return res.status(503).json({ success: false, error: 'DATABASE_UNAVAILABLE', message: 'Database service unavailable' });
-
     const email = req.body?.email ? String(req.body.email).trim().toLowerCase() : '';
     const password = req.body?.password ? String(req.body.password) : '';
 
@@ -371,52 +368,132 @@ router.post('/api/v1/auth/login', authLimiter, async (req, res) => {
       return res.status(400).json({ success: false, error: 'MISSING_CREDENTIALS', message: 'Email and password are required.' });
     }
 
-    // Find user in users collection
-    const userSnap = await db.collection('users').where('email', '==', email).limit(1).get();
-    if (userSnap.empty) {
-      return res.status(401).json({ success: false, error: 'INVALID_CREDENTIALS', message: 'Invalid email or password.' });
-    }
+    let authUser = null;
+    let authIdToken = null;
 
-    const userDoc = userSnap.docs[0];
-    const userData = userDoc.data();
-    const uid = userData.uid || userDoc.id;
+    // 1. Authenticate with Website Firebase Auth REST API (ff-store-4a61e)
+    try {
+      const fbAuthRes = await fetch('https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=AIzaSyBcuSIz3NvPh2kU-BziQfjYsGKCMSjeWR4', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          password,
+          returnSecureToken: true
+        })
+      });
 
-    // Retrieve password hash from user_auth collection
-    const authSnap = await db.collection('user_auth').doc(uid).get();
-    if (!authSnap.exists) {
-      return res.status(401).json({ success: false, error: 'INVALID_CREDENTIALS', message: 'Invalid email or password.' });
-    }
-
-    const authData = authSnap.data();
-    const isPasswordValid = verifyPassword(password, authData.passwordHash);
-    if (!isPasswordValid) {
-      return res.status(401).json({ success: false, error: 'INVALID_CREDENTIALS', message: 'Invalid email or password.' });
-    }
-
-    if (userData.status === 'blocked' || userData.status === 'banned') {
-      return res.status(403).json({ success: false, error: 'ACCOUNT_SUSPENDED', message: 'This account has been suspended.' });
-    }
-
-    const token = createSessionToken({
-      uid,
-      email: userData.email,
-      role: userData.role || 'client'
-    });
-
-    return res.status(200).json({
-      success: true,
-      token,
-      user: {
-        uid,
-        email: userData.email,
-        name: userData.name || '',
-        phone: userData.phone || '',
-        role: userData.role || 'client',
-        status: userData.status || 'Active',
-        isVip: !!userData.isVip,
-        subscriptionExpiry: userData.subscriptionExpiry || null
+      if (fbAuthRes.ok) {
+        const fbData = await fbAuthRes.json();
+        authUser = {
+          uid: fbData.localId,
+          email: (fbData.email || email).toLowerCase(),
+          displayName: fbData.displayName || ''
+        };
+        authIdToken = fbData.idToken;
       }
-    });
+    } catch (fbErr) {
+      console.warn('[AuthLogin] Live Firebase Auth note:', fbErr.message);
+    }
+
+    if (authUser && authIdToken) {
+      // Fetch user profile from Firestore using authenticated idToken (owner read)
+      let role = 'user';
+      let name = authUser.displayName || (email.includes('@') ? email.split('@')[0] : 'User');
+      let phone = '';
+      let status = 'Active';
+      let isBlocked = false;
+      let isVip = false;
+      let subscriptionExpiry = null;
+
+      try {
+        const uRes = await fetch(`https://firestore.googleapis.com/v1/projects/ff-store-4a61e/databases/(default)/documents/users/${authUser.uid}`, {
+          headers: { 'Authorization': `Bearer ${authIdToken}` }
+        });
+        if (uRes.ok) {
+          const uDoc = await uRes.json();
+          const f = uDoc.fields || {};
+          if (f.role && f.role.stringValue) role = f.role.stringValue.trim().toLowerCase();
+          if (f.name && f.name.stringValue) name = f.name.stringValue.trim();
+          if (f.phone && f.phone.stringValue) phone = f.phone.stringValue.trim();
+          if (f.status && f.status.stringValue) status = f.status.stringValue.trim();
+          if (f.isBlocked && f.isBlocked.booleanValue) isBlocked = true;
+          if (f.isVip && f.isVip.booleanValue) isVip = true;
+          if (f.subscriptionExpiry && f.subscriptionExpiry.stringValue) subscriptionExpiry = f.subscriptionExpiry.stringValue;
+        }
+      } catch (uErr) {
+        console.warn('[AuthLogin] User profile fetch note:', uErr.message);
+      }
+
+      if (isBlocked || status === 'blocked' || status === 'banned') {
+        return res.status(403).json({ success: false, error: 'ACCOUNT_SUSPENDED', message: 'This account has been suspended.' });
+      }
+
+      const token = createSessionToken({
+        uid: authUser.uid,
+        email: authUser.email,
+        role
+      });
+
+      return res.status(200).json({
+        success: true,
+        token,
+        user: {
+          uid: authUser.uid,
+          email: authUser.email,
+          name,
+          phone,
+          role,
+          status,
+          isVip,
+          subscriptionExpiry
+        }
+      });
+    }
+
+    // 2. Fallback to Local Dev Firestore user_auth collection
+    const { db } = getFirebaseAdmin();
+    if (db) {
+      const userSnap = await db.collection('users').where('email', '==', email).limit(1).get();
+      if (!userSnap.empty) {
+        const userDoc = userSnap.docs[0];
+        const userData = userDoc.data();
+        const uid = userData.uid || userDoc.id;
+
+        const authSnap = await db.collection('user_auth').doc(uid).get();
+        if (authSnap.exists) {
+          const authData = authSnap.data();
+          if (verifyPassword(password, authData.passwordHash)) {
+            if (userData.status === 'blocked' || userData.status === 'banned') {
+              return res.status(403).json({ success: false, error: 'ACCOUNT_SUSPENDED', message: 'This account has been suspended.' });
+            }
+
+            const token = createSessionToken({
+              uid,
+              email: userData.email,
+              role: userData.role || 'client'
+            });
+
+            return res.status(200).json({
+              success: true,
+              token,
+              user: {
+                uid,
+                email: userData.email,
+                name: userData.name || '',
+                phone: userData.phone || '',
+                role: userData.role || 'client',
+                status: userData.status || 'Active',
+                isVip: !!userData.isVip,
+                subscriptionExpiry: userData.subscriptionExpiry || null
+              }
+            });
+          }
+        }
+      }
+    }
+
+    return res.status(401).json({ success: false, error: 'INVALID_CREDENTIALS', message: 'Invalid email or password.' });
   } catch (err) {
     console.error('[Auth] Login error:', err.message);
     return res.status(500).json({ success: false, error: 'LOGIN_FAILED', message: 'Authentication failed.' });
@@ -541,6 +618,48 @@ router.get('/api/v1/app/version-check', async (req, res) => {
   } catch (err) {
     console.error('[VersionCheck] Error:', err);
     return res.status(500).json({ success: false, error: 'INTERNAL_ERROR', message: 'Failed to verify application version.' });
+  }
+});
+
+// =========================================================================
+// 3b. Store Contact & Settings Endpoint (/api/v1/store/settings)
+// Dynamic real-time synchronization with website Firestore system_settings/store_contact
+// =========================================================================
+async function getLiveStoreContact() {
+  try {
+    const res = await fetch('https://firestore.googleapis.com/v1/projects/ff-store-4a61e/databases/(default)/documents/system_settings/store_contact');
+    if (res.ok) {
+      const data = await res.json();
+      const f = data.fields || {};
+      const whatsapp = f.whatsapp?.stringValue || '+917318211010';
+      const telegram = f.telegram?.stringValue || 'alexzzzff';
+      const brandName = f.brandName?.stringValue || 'GAMERVAULT STORE';
+      return { whatsapp, telegram, brandName };
+    }
+  } catch (e) {
+    console.warn('[StoreContact] Live fetch note:', e.message);
+  }
+  return {
+    whatsapp: '+917318211010',
+    telegram: 'alexzzzff',
+    brandName: 'GAMERVAULT STORE'
+  };
+}
+
+router.get('/api/v1/store/settings', async (req, res) => {
+  try {
+    const contact = await getLiveStoreContact();
+    return res.status(200).json({
+      success: true,
+      ...contact
+    });
+  } catch (err) {
+    return res.status(200).json({
+      success: true,
+      whatsapp: '+917318211010',
+      telegram: 'alexzzzff',
+      brandName: 'GAMERVAULT STORE'
+    });
   }
 });
 
@@ -698,10 +817,13 @@ router.get('/api/v1/products', async (req, res) => {
       }
     }
 
+    const storeContact = await getLiveStoreContact();
+
     return res.status(200).json({
       success: true,
       count: products.length,
-      products
+      products,
+      storeContact
     });
   } catch (err) {
     console.error('[Products] Fetch error:', err.message);
