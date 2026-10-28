@@ -81,6 +81,15 @@ data class ChatMessage(
     val isAutomated: Boolean = false
 )
 
+data class ChatConversation(
+    val clientUid: String,
+    val clientName: String,
+    val clientEmail: String = "",
+    val lastMessage: String = "",
+    val status: String = "active",
+    val updatedAt: String = ""
+)
+
 data class UserProfile(
     val uid: String,
     val email: String,
@@ -92,7 +101,10 @@ data class UserProfile(
     val subscriptionExpiry: String? = null,
     val authProvider: String? = null,
     val usedLicenseKey: String? = null
-)
+) {
+    val isAdmin: Boolean get() = role.equals("admin", ignoreCase = true) || role.equals("superadmin", ignoreCase = true)
+    val isStaff: Boolean get() = isAdmin || role.equals("staff", ignoreCase = true) || role.equals("employee", ignoreCase = true)
+}
 
 data class AppVersionInfo(
     val latestVersionName: String = "1.0.0",

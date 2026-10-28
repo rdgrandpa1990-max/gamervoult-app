@@ -108,6 +108,9 @@ fun MainAppScaffold() {
                     onNavigateToExplore = { currentScreen = Screen.EXPLORE }
                 )
                 Screen.EXPLORE -> ExploreScreen()
+                Screen.CHATS -> ChatScreen(
+                    onNavigateToAuth = { currentScreen = Screen.PROFILE }
+                )
                 Screen.ORDERS -> OrdersScreen(
                     onNavigateToAuth = { currentScreen = Screen.PROFILE }
                 )

@@ -31,6 +31,12 @@ object GamervoultRepository {
     private val _chatMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val chatMessages: StateFlow<List<ChatMessage>> = _chatMessages.asStateFlow()
 
+    private val _adminConversations = MutableStateFlow<List<ChatConversation>>(emptyList())
+    val adminConversations: StateFlow<List<ChatConversation>> = _adminConversations.asStateFlow()
+
+    private val _selectedAdminClient = MutableStateFlow<ChatConversation?>(null)
+    val selectedAdminClient: StateFlow<ChatConversation?> = _selectedAdminClient.asStateFlow()
+
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
@@ -94,17 +100,25 @@ object GamervoultRepository {
                 sessionToken = savedToken
                 val meResult = ApiClient.getMe(savedToken)
                 if (meResult.isSuccess) {
-                    _currentUser.value = meResult.getOrNull()
+                    val profile = meResult.getOrNull()
+                    _currentUser.value = profile
                     fetchOrders()
-                    fetchChatMessages()
+                    if (profile?.isAdmin == true) {
+                        fetchAdminConversations()
+                    } else {
+                        fetchChatMessages()
+                    }
                 } else {
                     // Invalid or expired token
                     sessionToken = null
                     prefs.edit().remove(KEY_TOKEN).apply()
                     _currentUser.value = null
+                    initGuestSession(context)
                 }
             } else {
                 _currentUser.value = null
+                // Auto-create guest session so client is connected to Admin by default
+                initGuestSession(context)
             }
             _isInitializing.value = false
         }
@@ -219,18 +233,37 @@ object GamervoultRepository {
         return res
     }
 
-    suspend fun fetchChatMessages(): Result<List<ChatMessage>> {
+    suspend fun initGuestSession(context: Context): Result<String> {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        var deviceId = prefs.getString("KEY_DEVICE_ID", null)
+        if (deviceId.isNullOrBlank()) {
+            deviceId = java.util.UUID.randomUUID().toString()
+            prefs.edit().putString("KEY_DEVICE_ID", deviceId).apply()
+        }
+        val res = ApiClient.getOrCreateGuestSession(deviceId, "Gamer Client")
+        return if (res.isSuccess) {
+            val (token, _) = res.getOrThrow()
+            sessionToken = token
+            fetchChatMessages()
+            Result.success(token)
+        } else {
+            Result.failure(res.exceptionOrNull() ?: Exception("Guest session error"))
+        }
+    }
+
+    suspend fun fetchChatMessages(clientUid: String? = null): Result<List<ChatMessage>> {
         val token = sessionToken ?: return Result.failure(Exception("Not authenticated"))
-        val res = ApiClient.getChatMessages(token)
+        val res = ApiClient.getChatMessages(token, clientUid)
         if (res.isSuccess) {
             _chatMessages.value = res.getOrNull() ?: emptyList()
         }
         return res
     }
 
-    suspend fun sendMessage(text: String): Result<Unit> {
+    suspend fun sendMessage(text: String, targetClientUid: String? = null): Result<Unit> {
         val token = sessionToken ?: return Result.failure(Exception("Not authenticated"))
-        val res = ApiClient.sendChatMessage(token, text)
+        val isStaffReply = !targetClientUid.isNullOrBlank()
+        val res = ApiClient.sendChatMessage(token, text, targetClientUid, isStaffReply)
         return if (res.isSuccess) {
             val (userMsg, replyMsg) = res.getOrThrow()
             val updated = _chatMessages.value.toMutableList()
@@ -239,9 +272,31 @@ object GamervoultRepository {
                 updated.add(replyMsg)
             }
             _chatMessages.value = updated
+            if (isStaffReply) {
+                fetchAdminConversations()
+            }
             Result.success(Unit)
         } else {
             Result.failure(res.exceptionOrNull() ?: Exception("Failed to send message"))
+        }
+    }
+
+    suspend fun fetchAdminConversations(): Result<List<ChatConversation>> {
+        val token = sessionToken ?: return Result.failure(Exception("Not authenticated"))
+        val res = ApiClient.getAdminConversations(token)
+        if (res.isSuccess) {
+            _adminConversations.value = res.getOrNull() ?: emptyList()
+        }
+        return res
+    }
+
+    fun selectAdminClient(client: ChatConversation?) {
+        _selectedAdminClient.value = client
+        if (client != null) {
+            _chatMessages.value = emptyList()
+            CoroutineScope(Dispatchers.IO).launch {
+                fetchChatMessages(client.clientUid)
+            }
         }
     }
 

@@ -1610,19 +1610,109 @@ router.post('/api/v1/license/redeem', licenseRedeemLimiter, verifyFirebaseAuth, 
 });
 
 // =========================================================================
-// 11. Support Chat Endpoints (/api/v1/chat/messages, /api/v1/chat/send)
+// 11. Support Chat Endpoints (/api/v1/chat/messages, /api/v1/chat/send, /api/v1/chat/admin/conversations)
 // Synchronized with website chats/{clientUid}/messages collection
+// Admin & Superadmin connected by default to all clients and users
 // =========================================================================
+
+// Anonymous / Guest client session for instant chat connection without prior signup
+router.post('/api/v1/chat/guest-session', async (req, res) => {
+  const deviceId = req.body?.deviceId || ('guest_' + crypto.randomBytes(8).toString('hex'));
+  const sanitizedDeviceId = deviceId.replace(/[^a-zA-Z0-9_-]/g, '').substring(0, 64);
+  const clientUid = `client_${sanitizedDeviceId}`;
+  const clientName = req.body?.name || 'Gamer Client';
+  const token = createSessionToken({
+    uid: clientUid,
+    role: 'client',
+    name: clientName,
+    email: ''
+  });
+
+  // Auto-seed default conversation in Firestore so Admin and User are immediately connected
+  const { db } = getFirebaseAdmin();
+  if (db) {
+    try {
+      const chatDocRef = db.collection('chats').doc(clientUid);
+      const chatDoc = await chatDocRef.get();
+      if (!chatDoc.exists) {
+        const defaultAdminMsg = {
+          senderId: 'admin_team',
+          senderName: 'Our Team',
+          text: `👋 Namaste ${clientName}! Welcome to GamerVault Support Desk. You are directly connected with Our Team. How can we help you today with your accounts, orders, or queries?`,
+          createdAt: new Date().toISOString(),
+          isFromStaff: true,
+          isAutomated: false
+        };
+        await chatDocRef.set({
+          clientUid: clientUid,
+          clientName: clientName,
+          clientEmail: '',
+          status: 'active',
+          lastMessage: defaultAdminMsg.text,
+          updatedAt: new Date().toISOString()
+        });
+        await chatDocRef.collection('messages').add(defaultAdminMsg);
+      }
+    } catch (e) {
+      console.warn('[ChatGuest] Seed note:', e.message);
+    }
+  }
+
+  return res.status(200).json({
+    success: true,
+    token,
+    uid: clientUid,
+    role: 'client',
+    name: clientName
+  });
+});
+
+// Admin / Superadmin: List all connected clients & users
+router.get('/api/v1/chat/admin/conversations', verifyFirebaseAuth, async (req, res) => {
+  const { db } = getFirebaseAdmin();
+  if (!db) return res.status(503).json({ success: false, error: 'Database unavailable' });
+
+  if (!req.isAdmin && !req.isStaff) {
+    return res.status(403).json({ success: false, error: 'Staff or Admin privilege required.' });
+  }
+
+  try {
+    const snap = await db.collection('chats').limit(100).get();
+    const conversations = [];
+    snap.forEach(doc => {
+      const d = doc.data();
+      conversations.push({
+        clientUid: doc.id,
+        clientName: d.clientName || ('Client ' + doc.id.substring(0, 8)),
+        clientEmail: d.clientEmail || '',
+        lastMessage: d.lastMessage || 'Connected with Admin Desk',
+        status: d.status || 'active',
+        updatedAt: d.updatedAt ? (typeof d.updatedAt === 'string' ? d.updatedAt : (d.updatedAt.toDate ? d.updatedAt.toDate().toISOString() : new Date().toISOString())) : new Date().toISOString()
+      });
+    });
+    conversations.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    return res.status(200).json({ success: true, count: conversations.length, conversations });
+  } catch (err) {
+    console.error('[ChatAdmin] Error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to retrieve conversations.' });
+  }
+});
+
+// Retrieve chat messages for client or specific client if Admin/Staff
 router.get('/api/v1/chat/messages', verifyFirebaseAuth, async (req, res) => {
   const { db } = getFirebaseAdmin();
   if (!db) return res.status(503).json({ success: false, error: 'Database unavailable' });
 
+  // Admin/Staff can inspect any client's thread via ?clientUid=...
+  const requestedClientUid = req.query.clientUid;
+  const targetUid = ((req.isAdmin || req.isStaff) && requestedClientUid) ? requestedClientUid : req.uid;
+
   try {
-    const threadSnap = await db.collection('chats')
-      .doc(req.uid)
+    const chatDocRef = db.collection('chats').doc(targetUid);
+    const threadSnap = await chatDocRef
       .collection('messages')
       .orderBy('createdAt', 'asc')
-      .limit(50)
+      .limit(100)
       .get();
 
     const messages = [];
@@ -1634,29 +1724,53 @@ router.get('/api/v1/chat/messages', verifyFirebaseAuth, async (req, res) => {
         senderName: data.senderName,
         text: data.text,
         timestamp: data.createdAt || data.timestamp || new Date().toISOString(),
-        isFromStaff: data.senderId === 'admin' || data.isFromStaff === true,
+        isFromStaff: data.senderId === 'admin' || data.senderId === 'admin_superadmin' || data.isFromStaff === true,
         isAutomated: data.isAutomated === true || data.senderId === 'admin_auto'
       });
     });
 
+    // If thread is empty, seed initial default connection from Admin & Superadmin
     if (messages.length === 0) {
-      messages.push({
-        id: 'msg_welcome',
-        senderId: 'admin_auto',
-        senderName: 'Admin Support',
-        text: `Hello ${req.user?.name || 'Gamer'}, kindly leave your message or inquiry here. Official Gamervoult support will review and reply to your ticket.`,
-        timestamp: new Date().toISOString(),
-        isFromStaff: false,
-        isAutomated: true
-      });
+      const defaultAdminMsg = {
+        senderId: 'admin_team',
+        senderName: 'Our Team',
+        text: `👋 Namaste ${req.user?.name || 'Gamer'}! Welcome to GamerVault Support Desk. You are directly connected with Our Team. How can we help you today with your accounts, orders, or queries?`,
+        createdAt: new Date().toISOString(),
+        isFromStaff: true,
+        isAutomated: false
+      };
+      try {
+        await chatDocRef.set({
+          clientUid: targetUid,
+          clientName: req.user?.name || 'Gamer Client',
+          clientEmail: req.user?.email || '',
+          status: 'active',
+          lastMessage: defaultAdminMsg.text,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+        const seededRef = await chatDocRef.collection('messages').add(defaultAdminMsg);
+        messages.push({
+          id: seededRef.id,
+          ...defaultAdminMsg,
+          timestamp: defaultAdminMsg.createdAt
+        });
+      } catch (seedErr) {
+        messages.push({
+          id: 'msg_welcome',
+          ...defaultAdminMsg,
+          timestamp: defaultAdminMsg.createdAt
+        });
+      }
     }
 
-    return res.status(200).json({ success: true, count: messages.length, messages });
+    return res.status(200).json({ success: true, count: messages.length, messages, targetUid });
   } catch (err) {
+    console.error('[Chat] Messages fetch error:', err.message);
     return res.status(500).json({ success: false, error: 'Failed to retrieve messages.' });
   }
 });
 
+// Send chat message (by Client to Admin, or by Admin to specific Client)
 router.post('/api/v1/chat/send', chatSendLimiter, verifyFirebaseAuth, async (req, res) => {
   const { db } = getFirebaseAdmin();
   if (!db) return res.status(503).json({ success: false, error: 'Database unavailable' });
@@ -1665,50 +1779,55 @@ router.post('/api/v1/chat/send', chatSendLimiter, verifyFirebaseAuth, async (req
   if (!rawText || typeof rawText !== 'string' || rawText.trim().length === 0) {
     return res.status(400).json({ success: false, error: 'Message text cannot be empty.' });
   }
-  if (rawText.length > 1000) {
-    return res.status(400).json({ success: false, error: 'Message exceeds maximum length of 1000 characters.' });
+  if (rawText.length > 2000) {
+    return res.status(400).json({ success: false, error: 'Message exceeds maximum length of 2000 characters.' });
   }
 
   const cleanText = rawText.trim();
   const nowIso = new Date().toISOString();
-  const userMsg = {
+
+  // Determine if sender is Staff/Admin replying to a specific client
+  const isStaff = req.isAdmin || req.isStaff;
+  const targetClientUid = (isStaff && req.body?.targetClientUid) ? req.body.targetClientUid : req.uid;
+  const isFromStaff = isStaff && (targetClientUid !== req.uid || req.body?.isStaffReply === true);
+
+  const senderDisplayName = isFromStaff
+    ? (req.user?.name ? `${req.user.name} (Our Team)` : 'Our Team')
+    : (req.user?.name || 'Client');
+
+  const msgPayload = {
     senderId: req.uid,
-    senderName: req.user.name || 'Client',
+    senderName: senderDisplayName,
     text: cleanText,
     createdAt: nowIso,
-    isFromStaff: false,
+    isFromStaff: isFromStaff,
     isAutomated: false
   };
 
   try {
-    const chatDocRef = db.collection('chats').doc(req.uid);
+    const chatDocRef = db.collection('chats').doc(targetClientUid);
     await chatDocRef.set({
-      clientUid: req.uid,
-      clientName: req.user.name || 'Client',
-      clientEmail: req.user.email || '',
-      status: 'requesting',
+      clientUid: targetClientUid,
+      ...(isFromStaff ? {} : {
+        clientName: req.user?.name || 'Client',
+        clientEmail: req.user?.email || ''
+      }),
+      status: isFromStaff ? 'active' : 'requesting',
+      lastMessage: cleanText,
       updatedAt: nowIso
     }, { merge: true });
 
     const msgRef = chatDocRef.collection('messages');
-    const docRef = await msgRef.add(userMsg);
-
-    // Honest Automated System Acknowledgment
-    const replyMsg = {
-      senderId: 'admin_auto',
-      senderName: 'Automated Support System',
-      text: `Your message has been received. Our team will review your ticket and reply here as soon as possible.`,
-      createdAt: new Date().toISOString(),
-      isFromStaff: false,
-      isAutomated: true
-    };
-    await msgRef.add(replyMsg);
+    const docRef = await msgRef.add(msgPayload);
 
     return res.status(201).json({
       success: true,
       messageId: docRef.id,
-      userMessage: userMsg,
-      reply: replyMsg
+      userMessage: {
+        id: docRef.id,
+        ...msgPayload,
+        timestamp: nowIso
+      }
     });
   } catch (err) {
     console.error('[Chat] Send error:', err.message);

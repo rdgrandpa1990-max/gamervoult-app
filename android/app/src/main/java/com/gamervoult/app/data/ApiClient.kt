@@ -461,11 +461,14 @@ object ApiClient {
         }
     }
 
-    // 8. Support Chat Messages
-    suspend fun getChatMessages(token: String): Result<List<ChatMessage>> = withContext(Dispatchers.IO) {
+    // 8. Support Chat Messages (Client messages or specific client thread if Admin)
+    suspend fun getChatMessages(token: String, clientUid: String? = null): Result<List<ChatMessage>> = withContext(Dispatchers.IO) {
         try {
+            val urlBuilder = "$BASE_URL/api/v1/chat/messages".let { base ->
+                if (!clientUid.isNullOrBlank()) "$base?clientUid=$clientUid" else base
+            }
             val request = Request.Builder()
-                .url("$BASE_URL/api/v1/chat/messages")
+                .url(urlBuilder)
                 .header("Authorization", "Bearer $token")
                 .get()
                 .build()
@@ -500,11 +503,20 @@ object ApiClient {
         }
     }
 
-    // 9. Send Support Chat Message
-    suspend fun sendChatMessage(token: String, text: String): Result<Pair<ChatMessage, ChatMessage?>> = withContext(Dispatchers.IO) {
+    // 9. Send Support Chat Message (Client to Admin or Admin replying to Client)
+    suspend fun sendChatMessage(
+        token: String, 
+        text: String, 
+        targetClientUid: String? = null,
+        isStaffReply: Boolean = false
+    ): Result<Pair<ChatMessage, ChatMessage?>> = withContext(Dispatchers.IO) {
         try {
             val json = JSONObject().apply {
                 put("text", text.trim())
+                if (!targetClientUid.isNullOrBlank()) {
+                    put("targetClientUid", targetClientUid)
+                    put("isStaffReply", isStaffReply)
+                }
             }
             val body = json.toString().toRequestBody(JSON_MEDIA)
             val request = Request.Builder()
@@ -548,6 +560,73 @@ object ApiClient {
             }
 
             Result.success(Pair(userMsg, replyMsg))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // 9b. Admin Conversations List (Admin connects to all clients & users)
+    suspend fun getAdminConversations(token: String): Result<List<ChatConversation>> = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url("$BASE_URL/api/v1/chat/admin/conversations")
+                .header("Authorization", "Bearer $token")
+                .get()
+                .build()
+
+            val response = client.newCall(request).execute()
+            val raw = response.body?.string() ?: ""
+            val obj = JSONObject(raw)
+
+            if (!response.isSuccessful || !obj.optBoolean("success", false)) {
+                return@withContext Result.failure(Exception(obj.optString("error", "Failed to retrieve conversations")))
+            }
+
+            val arr = obj.optJSONArray("conversations") ?: JSONArray()
+            val list = mutableListOf<ChatConversation>()
+            for (i in 0 until arr.length()) {
+                val c = arr.getJSONObject(i)
+                list.add(
+                    ChatConversation(
+                        clientUid = c.optString("clientUid", ""),
+                        clientName = c.optString("clientName", "Client"),
+                        clientEmail = c.optString("clientEmail", ""),
+                        lastMessage = c.optString("lastMessage", ""),
+                        status = c.optString("status", "active"),
+                        updatedAt = c.optString("updatedAt", "")
+                    )
+                )
+            }
+            Result.success(list)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // 9c. Guest / Default Client Session (Connects user to Admin by default without signup)
+    suspend fun getOrCreateGuestSession(deviceId: String, name: String = "Gamer Client"): Result<Pair<String, String>> = withContext(Dispatchers.IO) {
+        try {
+            val json = JSONObject().apply {
+                put("deviceId", deviceId)
+                put("name", name)
+            }
+            val body = json.toString().toRequestBody(JSON_MEDIA)
+            val request = Request.Builder()
+                .url("$BASE_URL/api/v1/chat/guest-session")
+                .post(body)
+                .build()
+
+            val response = client.newCall(request).execute()
+            val raw = response.body?.string() ?: ""
+            val obj = JSONObject(raw)
+
+            if (!response.isSuccessful || !obj.optBoolean("success", false)) {
+                return@withContext Result.failure(Exception("Failed to initialize guest session"))
+            }
+
+            val token = obj.getString("token")
+            val uid = obj.getString("uid")
+            Result.success(Pair(token, uid))
         } catch (e: Exception) {
             Result.failure(e)
         }
