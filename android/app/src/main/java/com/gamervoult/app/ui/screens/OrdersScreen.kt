@@ -1,9 +1,11 @@
 package com.gamervoult.app.ui.screens
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -11,22 +13,32 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.gamervoult.app.data.DeliveryCredentials
 import com.gamervoult.app.data.GamervoultRepository
 import com.gamervoult.app.data.OrderItem
 import com.gamervoult.app.ui.theme.*
+import kotlinx.coroutines.launch
 
 @Composable
 fun OrdersScreen() {
-    val orders by GamervoultRepository.orders.collectAsState()
-    var selectedCredentialsOrder by remember { mutableStateOf<OrderItem?>(null) }
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     val clipboardManager = LocalClipboardManager.current
-    var copiedNotice by remember { mutableStateOf<String?>(null) }
+
+    val orders by GamervoultRepository.orders.collectAsStateWithLifecycle()
+    var isRefreshing by remember { mutableStateOf(false) }
+
+    var selectedOrderForCreds by remember { mutableStateOf<OrderItem?>(null) }
+    var fetchedCredentials by remember { mutableStateOf<DeliveryCredentials?>(null) }
+    var isLoadingCreds by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -34,7 +46,7 @@ fun OrdersScreen() {
             .background(DarkBackground)
             .padding(16.dp)
     ) {
-        // Header
+        // Top Header
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -48,22 +60,34 @@ fun OrdersScreen() {
                     fontWeight = FontWeight.Black
                 )
                 Text(
-                    text = "Authoritative Purchase & Credentials Registry",
+                    text = "Authoritative Server Purchases & Handover Vault",
                     color = TextMuted,
                     fontSize = 13.sp
                 )
             }
-            Surface(
-                color = DarkSurface,
-                shape = RoundedCornerShape(8.dp)
+
+            IconButton(
+                onClick = {
+                    coroutineScope.launch {
+                        isRefreshing = true
+                        GamervoultRepository.fetchOrders()
+                        isRefreshing = false
+                    }
+                },
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(DarkSurface)
             ) {
-                Text(
-                    text = "${orders.size} Total",
-                    color = TextSecondary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                )
+                if (isRefreshing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        color = PrimaryIndigo,
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = TextSecondary)
+                }
             }
         }
 
@@ -78,7 +102,7 @@ fun OrdersScreen() {
                     Icon(Icons.Default.ShoppingBag, contentDescription = null, tint = TextMuted, modifier = Modifier.size(56.dp))
                     Spacer(modifier = Modifier.height(12.dp))
                     Text("No orders placed yet", color = TextSecondary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                    Text("Choose a verified account from Home tab to begin.", color = TextMuted, fontSize = 13.sp)
+                    Text("Browse the live catalog to place your first escrow order.", color = TextMuted, fontSize = 13.sp)
                 }
             }
         } else {
@@ -89,7 +113,25 @@ fun OrdersScreen() {
                 items(orders) { order ->
                     OrderCard(
                         order = order,
-                        onViewCredentials = { selectedCredentialsOrder = order }
+                        onViewCredentials = {
+                            selectedOrderForCreds = order
+                            isLoadingCreds = true
+                            fetchedCredentials = null
+                            coroutineScope.launch {
+                                val res = GamervoultRepository.fetchCredentials(order.orderCode)
+                                isLoadingCreds = false
+                                if (res.isSuccess) {
+                                    fetchedCredentials = res.getOrThrow()
+                                } else {
+                                    Toast.makeText(
+                                        context,
+                                        res.exceptionOrNull()?.message ?: "Credentials unavailable",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                    selectedOrderForCreds = null
+                                }
+                            }
+                        }
                     )
                 }
             }
@@ -97,15 +139,12 @@ fun OrdersScreen() {
     }
 
     // Credentials Delivery Modal
-    selectedCredentialsOrder?.let { order ->
-        val creds = order.credentials ?: DeliveryCredentials(
-            loginId = "contact@freefireofficial.in",
-            password = "VerifiedViaEscrowDesk",
-            notes = "Please connect with Official Support Desk for live OTP verification."
-        )
-
+    selectedOrderForCreds?.let { order ->
         AlertDialog(
-            onDismissRequest = { selectedCredentialsOrder = null },
+            onDismissRequest = {
+                selectedOrderForCreds = null
+                fetchedCredentials = null
+            },
             containerColor = DarkSurface,
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -115,58 +154,86 @@ fun OrdersScreen() {
                 }
             },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        text = "Order ${order.orderCode} • ${order.itemTitle}",
-                        color = PrimaryIndigoLight,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    CredentialField(label = "Account Type", value = creds.accountType, onCopy = {
-                        clipboardManager.setText(AnnotatedString(creds.accountType))
-                        copiedNotice = "Account Type copied!"
-                    })
-
-                    CredentialField(label = "Login Email / ID", value = creds.loginId, onCopy = {
-                        clipboardManager.setText(AnnotatedString(creds.loginId))
-                        copiedNotice = "Login ID copied!"
-                    })
-
-                    CredentialField(label = "Password", value = creds.password, onCopy = {
-                        clipboardManager.setText(AnnotatedString(creds.password))
-                        copiedNotice = "Password copied!"
-                    })
-
-                    if (creds.backupCodes.isNotEmpty()) {
-                        CredentialField(label = "2-Step Backup Codes", value = creds.backupCodes, onCopy = {
-                            clipboardManager.setText(AnnotatedString(creds.backupCodes))
-                            copiedNotice = "Backup Codes copied!"
-                        })
-                    }
-
-                    Surface(
-                        color = DarkBackground,
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.fillMaxWidth()
+                if (isLoadingCreds) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = "🛡️ " + (creds.notes.ifEmpty { "Do not modify recovery email within 48 hours to maintain account warranty." }),
-                            color = AccentAmber,
-                            fontSize = 11.sp,
-                            lineHeight = 16.sp,
-                            modifier = Modifier.padding(10.dp)
-                        )
+                        CircularProgressIndicator(color = PrimaryIndigo)
                     }
+                } else if (fetchedCredentials != null) {
+                    val creds = fetchedCredentials!!
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            text = "Order ${order.orderCode} • ${order.itemTitle}",
+                            color = PrimaryIndigoLight,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
 
-                    copiedNotice?.let { notice ->
-                        Text(notice, color = AccentEmerald, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        CredentialField(
+                            label = "Account Type",
+                            value = creds.accountType,
+                            onCopy = {
+                                clipboardManager.setText(AnnotatedString(creds.accountType))
+                                Toast.makeText(context, "Account type copied", Toast.LENGTH_SHORT).show()
+                            }
+                        )
+
+                        CredentialField(
+                            label = "Login Email / ID",
+                            value = creds.loginId,
+                            onCopy = {
+                                clipboardManager.setText(AnnotatedString(creds.loginId))
+                                Toast.makeText(context, "Login ID copied", Toast.LENGTH_SHORT).show()
+                            }
+                        )
+
+                        CredentialField(
+                            label = "Password",
+                            value = creds.password,
+                            onCopy = {
+                                clipboardManager.setText(AnnotatedString(creds.password))
+                                Toast.makeText(context, "Password copied", Toast.LENGTH_SHORT).show()
+                            }
+                        )
+
+                        if (creds.backupCodes.isNotBlank()) {
+                            CredentialField(
+                                label = "Backup Codes",
+                                value = creds.backupCodes,
+                                onCopy = {
+                                    clipboardManager.setText(AnnotatedString(creds.backupCodes))
+                                    Toast.makeText(context, "Backup codes copied", Toast.LENGTH_SHORT).show()
+                                }
+                            )
+                        }
+
+                        if (creds.notes.isNotBlank()) {
+                            Surface(
+                                color = DarkBackground,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = "Notes: ${creds.notes}",
+                                    color = TextSecondary,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.padding(10.dp)
+                                )
+                            }
+                        }
                     }
                 }
             },
             confirmButton = {
                 Button(
-                    onClick = { selectedCredentialsOrder = null },
+                    onClick = {
+                        selectedOrderForCreds = null
+                        fetchedCredentials = null
+                    },
                     colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
                 ) {
                     Text("Done")
@@ -177,45 +244,21 @@ fun OrdersScreen() {
 }
 
 @Composable
-fun CredentialField(
-    label: String,
-    value: String,
-    onCopy: () -> Unit
-) {
-    Column {
-        Text(label, color = TextMuted, fontSize = 11.sp)
-        Spacer(modifier = Modifier.height(2.dp))
-        Surface(
-            color = DarkBackground,
-            shape = RoundedCornerShape(8.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(value, color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                IconButton(onClick = onCopy, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = PrimaryIndigoLight, modifier = Modifier.size(16.dp))
-                }
-            }
-        }
-    }
-}
-
-@Composable
 fun OrderCard(
     order: OrderItem,
     onViewCredentials: () -> Unit
 ) {
-    val isPaid = order.status.uppercase() == "PAID"
-    val isPending = order.status.uppercase() == "PENDING"
+    val isPaid = order.status.equals("PAID", ignoreCase = true)
+    val statusColor = when (order.status.uppercase()) {
+        "PAID" -> AccentEmerald
+        "PENDING" -> AccentAmber
+        else -> AccentRed
+    }
 
     Card(
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = DarkCard),
-        border = CardDefaults.outlinedCardBorder(),
+        border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -227,31 +270,19 @@ fun OrderCard(
                 Text(
                     text = order.orderCode,
                     color = PrimaryIndigoLight,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Black
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
                 )
 
                 Surface(
-                    color = when {
-                        isPaid -> AccentEmerald.copy(alpha = 0.15f)
-                        isPending -> AccentAmber.copy(alpha = 0.15f)
-                        else -> AccentRed.copy(alpha = 0.15f)
-                    },
+                    color = statusColor.copy(alpha = 0.15f),
                     shape = RoundedCornerShape(6.dp)
                 ) {
                     Text(
-                        text = when {
-                            isPaid -> "PAID & VERIFIED"
-                            isPending -> "PAYMENT PENDING"
-                            else -> order.status
-                        },
-                        color = when {
-                            isPaid -> AccentEmerald
-                            isPending -> AccentAmber
-                            else -> AccentRed
-                        },
+                        text = order.status.uppercase(),
+                        color = statusColor,
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
+                        fontWeight = FontWeight.Black,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                     )
                 }
@@ -270,27 +301,46 @@ fun OrderCard(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(order.createdAt, color = TextMuted, fontSize = 12.sp)
-                Text("₹${order.amount}", color = AccentEmerald, fontSize = 18.sp, fontWeight = FontWeight.Black)
+                Text(
+                    text = "Amount: ₹${order.amount}",
+                    color = TextSecondary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                if (order.paidAt != null) {
+                    Text(
+                        text = "Paid: ${order.paidAt.take(16)}",
+                        color = TextMuted,
+                        fontSize = 11.sp
+                    )
+                }
             }
 
+            if (order.utr != null) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "UTR: ${order.utr}",
+                    color = AccentCyan,
+                    fontSize = 11.sp
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
             if (isPaid) {
-                Spacer(modifier = Modifier.height(12.dp))
                 Button(
                     onClick = onViewCredentials,
-                    shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = AccentEmerald),
+                    shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("View Account Credentials", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
-            } else if (isPending) {
-                Spacer(modifier = Modifier.height(12.dp))
+            } else {
                 Surface(
                     color = DarkSurface,
                     shape = RoundedCornerShape(8.dp),
@@ -300,11 +350,11 @@ fun OrderCard(
                         modifier = Modifier.padding(10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.Info, contentDescription = null, tint = AccentAmber, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.Lock, contentDescription = null, tint = AccentAmber, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Awaiting UPI gateway confirmation. Status will update automatically.",
-                            color = TextSecondary,
+                            text = "Awaiting Payment Confirmation. Credentials lock automatically releases upon gateway verification.",
+                            color = TextMuted,
                             fontSize = 11.sp
                         )
                     }
@@ -314,3 +364,32 @@ fun OrderCard(
     }
 }
 
+@Composable
+fun CredentialField(
+    label: String,
+    value: String,
+    onCopy: () -> Unit
+) {
+    Surface(
+        color = DarkBackground,
+        shape = RoundedCornerShape(10.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = label, color = TextMuted, fontSize = 11.sp)
+                Text(text = value, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            }
+            IconButton(onClick = onCopy) {
+                Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = PrimaryIndigoLight, modifier = Modifier.size(18.dp))
+            }
+        }
+    }
+}

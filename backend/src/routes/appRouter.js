@@ -1,11 +1,15 @@
 import { Router } from 'express';
+import crypto from 'crypto';
 import { getFirebaseAdmin } from '../firebase.js';
 import { 
   verifyFirebaseAuth, 
   requireRoles, 
   timingSafeEqualStr,
   createRateLimiter,
-  validateRequestPayload 
+  validateRequestPayload,
+  createSessionToken,
+  hashPassword,
+  verifyPassword
 } from '../authMiddleware.js';
 
 const router = Router();
@@ -14,10 +18,169 @@ const router = Router();
 router.use(validateRequestPayload);
 
 // Dedicated Endpoint Rate Limiters
+const authLimiter = createRateLimiter(60000, 20);             // 20 auth attempts per min
 const orderCreateLimiter = createRateLimiter(60000, 20);      // 20 order creations per min
 const webhookLimiter = createRateLimiter(60000, 60);          // 60 webhook callbacks per min
 const licenseRedeemLimiter = createRateLimiter(60000, 10);    // 10 key activations per min
 const chatSendLimiter = createRateLimiter(60000, 30);         // 30 support messages per min
+
+// =========================================================================
+// 0a. Registration Endpoint (/api/v1/auth/register)
+// =========================================================================
+router.post('/api/v1/auth/register', authLimiter, async (req, res) => {
+  try {
+    const { db } = getFirebaseAdmin();
+    if (!db) return res.status(503).json({ success: false, error: 'DATABASE_UNAVAILABLE', message: 'Database service unavailable' });
+
+    const email = req.body?.email ? String(req.body.email).trim().toLowerCase() : '';
+    const password = req.body?.password ? String(req.body.password) : '';
+    const name = req.body?.name ? String(req.body.name).trim() : '';
+    const phone = req.body?.phone ? String(req.body.phone).trim() : '';
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!email || !emailRegex.test(email)) {
+      return res.status(400).json({ success: false, error: 'INVALID_EMAIL', message: 'A valid email address is required.' });
+    }
+    if (!password || password.length < 6) {
+      return res.status(400).json({ success: false, error: 'WEAK_PASSWORD', message: 'Password must be at least 6 characters.' });
+    }
+
+    // Check if user already exists
+    const existingSnap = await db.collection('users').where('email', '==', email).limit(1).get();
+    if (!existingSnap.empty) {
+      return res.status(409).json({ success: false, error: 'EMAIL_EXISTS', message: 'An account with this email already exists.' });
+    }
+
+    const uid = 'usr_' + crypto.randomBytes(8).toString('hex');
+    const passwordHash = hashPassword(password);
+    const nowIso = new Date().toISOString();
+
+    const userProfile = {
+      uid,
+      email,
+      name: name || email.split('@')[0],
+      phone: phone || '',
+      role: 'client', // strictly unprivileged client role
+      status: 'Active',
+      isVip: false,
+      subscriptionExpiry: null,
+      createdAt: nowIso,
+      updatedAt: nowIso
+    };
+
+    // Store in users collection
+    await db.collection('users').doc(uid).set(userProfile);
+
+    // Store credentials in private user_auth collection
+    await db.collection('user_auth').doc(uid).set({
+      uid,
+      email,
+      passwordHash,
+      createdAt: nowIso
+    });
+
+    const token = createSessionToken({
+      uid,
+      email,
+      role: 'client'
+    });
+
+    return res.status(201).json({
+      success: true,
+      token,
+      user: userProfile
+    });
+  } catch (err) {
+    console.error('[Auth] Register error:', err.message);
+    return res.status(500).json({ success: false, error: 'REGISTRATION_FAILED', message: 'Account creation failed.' });
+  }
+});
+
+// =========================================================================
+// 0b. Login Endpoint (/api/v1/auth/login)
+// =========================================================================
+router.post('/api/v1/auth/login', authLimiter, async (req, res) => {
+  try {
+    const { db } = getFirebaseAdmin();
+    if (!db) return res.status(503).json({ success: false, error: 'DATABASE_UNAVAILABLE', message: 'Database service unavailable' });
+
+    const email = req.body?.email ? String(req.body.email).trim().toLowerCase() : '';
+    const password = req.body?.password ? String(req.body.password) : '';
+
+    if (!email || !password) {
+      return res.status(400).json({ success: false, error: 'MISSING_CREDENTIALS', message: 'Email and password are required.' });
+    }
+
+    // Find user in users collection
+    const userSnap = await db.collection('users').where('email', '==', email).limit(1).get();
+    if (userSnap.empty) {
+      return res.status(401).json({ success: false, error: 'INVALID_CREDENTIALS', message: 'Invalid email or password.' });
+    }
+
+    const userDoc = userSnap.docs[0];
+    const userData = userDoc.data();
+    const uid = userData.uid || userDoc.id;
+
+    // Retrieve password hash from user_auth collection
+    const authSnap = await db.collection('user_auth').doc(uid).get();
+    if (!authSnap.exists) {
+      return res.status(401).json({ success: false, error: 'INVALID_CREDENTIALS', message: 'Invalid email or password.' });
+    }
+
+    const authData = authSnap.data();
+    const isPasswordValid = verifyPassword(password, authData.passwordHash);
+    if (!isPasswordValid) {
+      return res.status(401).json({ success: false, error: 'INVALID_CREDENTIALS', message: 'Invalid email or password.' });
+    }
+
+    if (userData.status === 'blocked' || userData.status === 'banned') {
+      return res.status(403).json({ success: false, error: 'ACCOUNT_SUSPENDED', message: 'This account has been suspended.' });
+    }
+
+    const token = createSessionToken({
+      uid,
+      email: userData.email,
+      role: userData.role || 'client'
+    });
+
+    return res.status(200).json({
+      success: true,
+      token,
+      user: {
+        uid,
+        email: userData.email,
+        name: userData.name || '',
+        phone: userData.phone || '',
+        role: userData.role || 'client',
+        status: userData.status || 'Active',
+        isVip: !!userData.isVip,
+        subscriptionExpiry: userData.subscriptionExpiry || null
+      }
+    });
+  } catch (err) {
+    console.error('[Auth] Login error:', err.message);
+    return res.status(500).json({ success: false, error: 'LOGIN_FAILED', message: 'Authentication failed.' });
+  }
+});
+
+// =========================================================================
+// 0c. Current Session Profile (/api/v1/auth/me)
+// =========================================================================
+router.get('/api/v1/auth/me', verifyFirebaseAuth, async (req, res) => {
+  return res.status(200).json({
+    success: true,
+    user: {
+      uid: req.uid,
+      email: req.user.email || '',
+      name: req.user.name || '',
+      phone: req.user.phone || '',
+      role: req.userRole || 'client',
+      status: req.user.status || 'Active',
+      isVip: !!req.user.isVip,
+      subscriptionExpiry: req.user.subscriptionExpiry || null
+    }
+  });
+});
 
 
 // Strict URL validation: must be valid HTTPS
@@ -135,19 +298,29 @@ router.get('/api/v1/products', async (req, res) => {
     snap.forEach(doc => {
       const data = doc.data();
       if (data.status !== 'deleted' && data.status !== 'archived') {
+        const rawMediaList = Array.isArray(data.mediaList) && data.mediaList.length > 0
+          ? data.mediaList.map(m => typeof m === 'string' ? { url: m, type: 'image' } : m)
+          : (data.mediaUrl ? [{ url: data.mediaUrl, type: data.mediaType || 'image' }] : []);
+        const primaryMedia = rawMediaList[0]?.url || data.imageUrl || null;
+
         products.push({
           id: doc.id,
-          title: data.title || data.name || 'Pro FreeFire Account',
+          title: data.title || data.name || 'Game Account',
           price: Number(data.price) || 0,
-          originalPrice: Number(data.originalPrice || data.price * 1.5) || 0,
-          category: data.category || 'VIP Account',
+          originalPrice: data.originalPrice ? Number(data.originalPrice) : null,
+          category: data.category || 'General',
           description: data.description || '',
-          images: data.images || (data.imageUrl ? [data.imageUrl] : []),
-          badge: data.badge || (data.isFeatured ? '⭐ FEATURED' : 'VERIFIED'),
-          level: data.level || 70,
-          evoGuns: data.evoGuns || 0,
-          likes: data.likes || 10000,
+          mediaUrl: primaryMedia,
+          mediaList: rawMediaList,
+          images: rawMediaList.map(m => m.url).filter(Boolean),
+          badge: data.badge || null,
+          level: data.level ? Number(data.level) : null,
+          evoGuns: data.evoGuns !== undefined ? Number(data.evoGuns) : null,
+          likes: data.likes ? Number(data.likes) : null,
           isSold: data.status === 'sold' || data.isSold === true,
+          status: data.status || 'active',
+          accountUid: data.accountUid || null,
+          deliveryMode: data.deliveryMode || 'contact_seller',
           updatedAt: data.updatedAt || new Date().toISOString()
         });
       }
@@ -900,14 +1073,16 @@ router.get('/api/v1/chat/messages', verifyFirebaseAuth, async (req, res) => {
       messages.push({ id: doc.id, ...doc.data() });
     });
 
-    // If thread is empty, return initial official greeting
+    // If thread is empty, return empty list or genuine welcome system notice
     if (messages.length === 0) {
       messages.push({
-        id: 'msg_welcome',
-        senderName: 'Escrow Desk Official',
-        text: 'Welcome to Gamervoult Official Support Desk! How can we assist you with account verification or delivery today?',
+        id: 'msg_system_notice',
+        senderId: 'system',
+        senderName: 'Gamervoult Support System',
+        text: 'Welcome to Gamervoult Support. You can leave a message here regarding account verification, order delivery, or escrow assistance. A support representative will respond to your ticket.',
         timestamp: new Date().toISOString(),
-        isFromStaff: true
+        isFromStaff: false,
+        isAutomated: true
       });
     }
 
@@ -936,20 +1111,22 @@ router.post('/api/v1/chat/send', chatSendLimiter, verifyFirebaseAuth, async (req
     senderName: req.user.name || 'Player',
     text: cleanText,
     timestamp: nowIso,
-    isFromStaff: false
+    isFromStaff: false,
+    isAutomated: false
   };
 
   try {
     const chatRef = db.collection('support_chats').doc(req.uid).collection('messages');
     const docRef = await chatRef.add(userMsg);
 
-    // Auto-reply acknowledgment
+    // Honest Automated System Acknowledgment
     const replyMsg = {
-      senderId: 'copilot_escrow_desk',
-      senderName: 'Escrow Copilot Specialist',
-      text: `Thank you for contacting Gamervoult Escrow Support. We logged your message: "${cleanText}". A dedicated escrow agent will monitor your account handover.`,
+      senderId: 'system_auto_responder',
+      senderName: 'Automated Support System',
+      text: `Your message has been received. Our team will review your ticket and reply here as soon as possible.`,
       timestamp: new Date().toISOString(),
-      isFromStaff: true
+      isFromStaff: false,
+      isAutomated: true
     };
     await chatRef.add(replyMsg);
 

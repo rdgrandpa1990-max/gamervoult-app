@@ -1,241 +1,209 @@
 package com.gamervoult.app.data
 
+import android.content.Context
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import kotlinx.coroutines.launch
 
 object GamervoultRepository {
 
-    // Current User Session
-    private val _currentUser = MutableStateFlow<UserProfile?>(
-        UserProfile(
-            uid = "gv_user_7788",
-            email = "player@gamervoult.in",
-            name = "Harsh Pandey",
-            role = "client",
-            status = "Active",
-            isVip = true,
-            subscriptionExpiry = "30 Nov 2026"
-        )
-    )
+    private const val PREFS_NAME = "gamervoult_session_prefs"
+    private const val KEY_TOKEN = "session_token"
+
+    private var sessionToken: String? = null
+
+    // State Flows
+    private val _currentUser = MutableStateFlow<UserProfile?>(null)
     val currentUser: StateFlow<UserProfile?> = _currentUser.asStateFlow()
 
-    // Products Flow
-    private val _products = MutableStateFlow<List<ProductItem>>(
-        listOf(
-            ProductItem(
-                id = "prod_01",
-                title = "Garena VIP ID 75 • 7 Evo Guns Maxed",
-                price = 1499,
-                originalPrice = 2499,
-                category = "Evo Guns",
-                description = "Level 75 ID with Maxed Blue Flame Draco, Cobra MP40, Megalodon Alpha Scar. 100% verified single-owner account with recovery warranty.",
-                badge = "⭐ TOP DEAL",
-                level = 75,
-                evoGuns = 7,
-                likes = 28400
-            ),
-            ProductItem(
-                id = "prod_02",
-                title = "Season 1 Sakura + Hip Hop Bundle OG ID",
-                price = 3999,
-                originalPrice = 5999,
-                category = "VIP Account",
-                description = "Original Season 1 Sakura and Season 2 Hip Hop passes unlocked. Includes Old Criminal Bundles (Red, Yellow) and Titan Scar.",
-                badge = "👑 ULTRA RARE",
-                level = 78,
-                evoGuns = 9,
-                likes = 45200
-            ),
-            ProductItem(
-                id = "prod_03",
-                title = "Grandmaster Rank Push ID • 4 Evo Level 6",
-                price = 899,
-                originalPrice = 1499,
-                category = "Flash Deals",
-                description = "Current BR-Ranked Grandmaster 3 stars. MP40 Predatory Cobra, AK Blue Flame, UMP Booyah Day. Clean login.",
-                badge = "⚡ FLASH SALE",
-                level = 71,
-                evoGuns = 4,
-                likes = 14900
-            ),
-            ProductItem(
-                id = "prod_04",
-                title = "Level 72 Pure Clean Gmail Bound Account",
-                price = 599,
-                originalPrice = 999,
-                category = "Level 70+",
-                description = "Clean single Gmail binding. Perfect starter ID for tournament play with 15 Elite Passes and 2 Evo Guns.",
-                badge = "VERIFIED",
-                level = 72,
-                evoGuns = 2,
-                likes = 9800
-            )
-        )
-    )
+    private val _isInitializing = MutableStateFlow(true)
+    val isInitializing: StateFlow<Boolean> = _isInitializing.asStateFlow()
+
+    private val _products = MutableStateFlow<List<ProductItem>>(emptyList())
     val products: StateFlow<List<ProductItem>> = _products.asStateFlow()
 
-    // Stories Flow
-    private val _stories = MutableStateFlow<List<StoryItem>>(
-        listOf(
-            StoryItem("st_1", "🔥 50% Off Flash Drop", "DEAL"),
-            StoryItem("st_2", "🛡️ Escrow Guarantee 2026", "SECURITY"),
-            StoryItem("st_3", "⚡ Instant Handover Guide", "TUTORIAL"),
-            StoryItem("st_4", "👑 Sakura Bundle Drop", "RARE")
-        )
-    )
-    val stories: StateFlow<List<StoryItem>> = _stories.asStateFlow()
-
-    // Orders Flow
-    private val _orders = MutableStateFlow<List<OrderItem>>(
-        listOf(
-            OrderItem(
-                orderCode = "GV-8X9P-4421",
-                itemId = "prod_01",
-                itemTitle = "Garena VIP ID 75 • 7 Evo Guns Maxed",
-                amount = 1499,
-                status = "PAID",
-                createdAt = "28 Oct 2026, 10:15 AM",
-                paidAt = "28 Oct 2026, 10:18 AM",
-                utr = "430192847192",
-                credentials = DeliveryCredentials(
-                    accountType = "Google",
-                    loginId = "vip_escrow_player75@gmail.com",
-                    password = "SecureEscrowPass#2026",
-                    backupCodes = "1829 4019, 8492 0184, 9182 3019",
-                    notes = "Login via Google Account. Do not modify recovery email within the first 48 hours to prevent security lock.",
-                    tutorialUrl = "https://freefireofficial.in/handover-tutorial"
-                )
-            ),
-            OrderItem(
-                orderCode = "GV-7Y1K-9022",
-                itemId = "prod_03",
-                itemTitle = "Grandmaster Rank Push ID • 4 Evo Level 6",
-                amount = 899,
-                status = "PENDING",
-                createdAt = "28 Oct 2026, 11:05 AM"
-            )
-        )
-    )
+    private val _orders = MutableStateFlow<List<OrderItem>>(emptyList())
     val orders: StateFlow<List<OrderItem>> = _orders.asStateFlow()
 
-    // Chat Messages Flow
-    private val _chatMessages = MutableStateFlow<List<ChatMessage>>(
-        listOf(
-            ChatMessage(
-                id = "msg_1",
-                senderName = "Escrow Desk Official",
-                text = "Welcome to Gamervoult Official Support Desk! How can we assist you with account verification or delivery today?",
-                timestamp = "10:00 AM",
-                isFromStaff = true
-            ),
-            ChatMessage(
-                id = "msg_2",
-                senderName = "Harsh Pandey",
-                text = "Hi, I just paid for order GV-8X9P-4421. Where can I find my account backup codes?",
-                timestamp = "10:19 AM",
-                isFromStaff = false
-            ),
-            ChatMessage(
-                id = "msg_3",
-                senderName = "Escrow Desk Official",
-                text = "✅ Your payment was verified via gateway! You can now access your login details, password, and backup codes in the 'My Orders' tab. We are here if you need binding help.",
-                timestamp = "10:20 AM",
-                isFromStaff = true
-            )
-        )
-    )
+    private val _chatMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val chatMessages: StateFlow<List<ChatMessage>> = _chatMessages.asStateFlow()
 
-    fun sendMessage(text: String) {
-        if (text.isBlank()) return
-        val timeStr = SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date())
-        val userMsg = ChatMessage(
-            id = "msg_" + System.currentTimeMillis(),
-            senderName = _currentUser.value?.name ?: "User",
-            text = text,
-            timestamp = timeStr,
-            isFromStaff = false
-        )
-        _chatMessages.value = _chatMessages.value + userMsg
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
-        // Auto-reply simulation for responsive experience
-        val replyMsg = ChatMessage(
-            id = "msg_reply_" + System.currentTimeMillis(),
-            senderName = "AI Copilot Desk",
-            text = "Thank you for connecting! Our Escrow Specialist has received your message: \"$text\". Official response will be logged immediately.",
-            timestamp = timeStr,
-            isFromStaff = true
-        )
-        _chatMessages.value = _chatMessages.value + replyMsg
+    fun getSessionToken(): String? = sessionToken
+
+    fun initSession(context: Context, coroutineScope: CoroutineScope) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val savedToken = prefs.getString(KEY_TOKEN, null)
+
+        coroutineScope.launch {
+            _isInitializing.value = true
+            // Always fetch fresh catalog from real server
+            fetchProducts()
+
+            if (!savedToken.isNullOrBlank()) {
+                sessionToken = savedToken
+                val meResult = ApiClient.getMe(savedToken)
+                if (meResult.isSuccess) {
+                    _currentUser.value = meResult.getOrNull()
+                    fetchOrders()
+                    fetchChatMessages()
+                } else {
+                    // Invalid or expired token
+                    sessionToken = null
+                    prefs.edit().remove(KEY_TOKEN).apply()
+                    _currentUser.value = null
+                }
+            } else {
+                _currentUser.value = null
+            }
+            _isInitializing.value = false
+        }
     }
 
-    fun createOrder(product: ProductItem): OrderItem {
-        val timeStr = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()).format(Date())
-        val code = "GV-" + (1000..9999).random() + "-" + (1000..9999).random()
-        val newOrder = OrderItem(
-            orderCode = code,
-            itemId = product.id,
-            itemTitle = product.title,
-            amount = product.price,
-            status = "PENDING",
-            createdAt = timeStr
-        )
-        _orders.value = listOf(newOrder) + _orders.value
-        return newOrder
+    suspend fun login(context: Context, email: String, pass: String): Result<UserProfile> {
+        _isLoading.value = true
+        val res = ApiClient.login(email, pass)
+        _isLoading.value = false
+
+        return if (res.isSuccess) {
+            val (token, profile) = res.getOrThrow()
+            sessionToken = token
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_TOKEN, token)
+                .apply()
+
+            _currentUser.value = profile
+            fetchOrders()
+            fetchChatMessages()
+            Result.success(profile)
+        } else {
+            Result.failure(res.exceptionOrNull() ?: Exception("Login failed"))
+        }
     }
 
-    fun logout() {
+    suspend fun register(
+        context: Context,
+        email: String,
+        pass: String,
+        name: String,
+        phone: String
+    ): Result<UserProfile> {
+        _isLoading.value = true
+        val res = ApiClient.register(email, pass, name, phone)
+        _isLoading.value = false
+
+        return if (res.isSuccess) {
+            val (token, profile) = res.getOrThrow()
+            sessionToken = token
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_TOKEN, token)
+                .apply()
+
+            _currentUser.value = profile
+            fetchOrders()
+            fetchChatMessages()
+            Result.success(profile)
+        } else {
+            Result.failure(res.exceptionOrNull() ?: Exception("Registration failed"))
+        }
+    }
+
+    fun logout(context: Context) {
+        sessionToken = null
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .remove(KEY_TOKEN)
+            .apply()
+
         _currentUser.value = null
         _orders.value = emptyList()
+        _chatMessages.value = emptyList()
     }
 
-    fun login(
-        email: String = "player@gamervoult.in",
-        name: String = "Harsh Pandey",
-        role: String = "client"
-    ) {
-        _currentUser.value = UserProfile(
-            uid = "gv_user_7788",
-            email = email,
-            name = name,
-            role = role,
-            status = "Active",
-            isVip = true,
-            subscriptionExpiry = "30 Nov 2026"
+    suspend fun fetchProducts(): Result<List<ProductItem>> {
+        val res = ApiClient.getProducts()
+        if (res.isSuccess) {
+            _products.value = res.getOrNull() ?: emptyList()
+        }
+        return res
+    }
+
+    suspend fun fetchOrders(): Result<List<OrderItem>> {
+        val token = sessionToken ?: return Result.failure(Exception("Not authenticated"))
+        val res = ApiClient.getOrders(token)
+        if (res.isSuccess) {
+            _orders.value = res.getOrNull() ?: emptyList()
+        }
+        return res
+    }
+
+    suspend fun fetchChatMessages(): Result<List<ChatMessage>> {
+        val token = sessionToken ?: return Result.failure(Exception("Not authenticated"))
+        val res = ApiClient.getChatMessages(token)
+        if (res.isSuccess) {
+            _chatMessages.value = res.getOrNull() ?: emptyList()
+        }
+        return res
+    }
+
+    suspend fun sendMessage(text: String): Result<Unit> {
+        val token = sessionToken ?: return Result.failure(Exception("Not authenticated"))
+        val res = ApiClient.sendChatMessage(token, text)
+        return if (res.isSuccess) {
+            val (userMsg, replyMsg) = res.getOrThrow()
+            val updated = _chatMessages.value.toMutableList()
+            updated.add(userMsg)
+            if (replyMsg != null) {
+                updated.add(replyMsg)
+            }
+            _chatMessages.value = updated
+            Result.success(Unit)
+        } else {
+            Result.failure(res.exceptionOrNull() ?: Exception("Failed to send message"))
+        }
+    }
+
+    suspend fun createOrder(product: ProductItem): Result<OrderItem> {
+        val token = sessionToken ?: return Result.failure(Exception("Not authenticated"))
+        val user = _currentUser.value ?: return Result.failure(Exception("No active user session"))
+
+        val res = ApiClient.createOrder(
+            token = token,
+            itemId = product.id,
+            customerName = user.name,
+            customerEmail = user.email,
+            customerMobile = user.phone ?: ""
         )
-        // Reload user orders
-        _orders.value = listOf(
-            OrderItem(
-                orderCode = "GV-8X9P-4421",
-                itemId = "prod_01",
-                itemTitle = "Garena VIP ID 75 • 7 Evo Guns Maxed",
-                amount = 1499,
-                status = "PAID",
-                createdAt = "28 Oct 2026, 10:15 AM",
-                paidAt = "28 Oct 2026, 10:18 AM",
-                utr = "430192847192",
-                credentials = DeliveryCredentials(
-                    accountType = "Google",
-                    loginId = "vip_escrow_player75@gmail.com",
-                    password = "SecureEscrowPass#2026",
-                    backupCodes = "1829 4019, 8492 0184, 9182 3019",
-                    notes = "Login via Google Account. Do not modify recovery email within the first 48 hours to prevent security lock.",
-                    tutorialUrl = "https://freefireofficial.in/handover-tutorial"
-                )
-            ),
-            OrderItem(
-                orderCode = "GV-7Y1K-9022",
-                itemId = "prod_03",
-                itemTitle = "Grandmaster Rank Push ID • 4 Evo Level 6",
-                amount = 899,
-                status = "PENDING",
-                createdAt = "28 Oct 2026, 11:05 AM"
-            )
-        )
+
+        if (res.isSuccess) {
+            val newOrder = res.getOrThrow()
+            _orders.value = listOf(newOrder) + _orders.value
+        }
+        return res
+    }
+
+    suspend fun fetchCredentials(orderCode: String): Result<DeliveryCredentials> {
+        val token = sessionToken ?: return Result.failure(Exception("Not authenticated"))
+        return ApiClient.getOrderCredentials(token, orderCode)
+    }
+
+    suspend fun redeemLicense(licenseKey: String): Result<String> {
+        val token = sessionToken ?: return Result.failure(Exception("Not authenticated"))
+        val res = ApiClient.redeemLicense(token, licenseKey)
+        if (res.isSuccess) {
+            // Refresh user profile after redemption
+            val meRes = ApiClient.getMe(token)
+            if (meRes.isSuccess) {
+                _currentUser.value = meRes.getOrNull()
+            }
+        }
+        return res
     }
 }
-

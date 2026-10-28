@@ -1,5 +1,6 @@
 package com.gamervoult.app.ui.screens
 
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -12,7 +13,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SupportAgent
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -20,9 +21,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.gamervoult.app.data.ChatMessage
 import com.gamervoult.app.data.GamervoultRepository
 import com.gamervoult.app.ui.theme.*
@@ -31,16 +34,19 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen() {
-    val messages by GamervoultRepository.chatMessages.collectAsState()
-    var inputText by remember { mutableStateOf("") }
-    val listState = rememberLazyListState()
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val messages by GamervoultRepository.chatMessages.collectAsStateWithLifecycle()
+    var inputText by remember { mutableStateOf("") }
+    var isSending by remember { mutableStateOf(false) }
+    var isRefreshing by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
 
-    val quickPrompts = listOf(
-        "How does account handover work?",
-        "Is escrow payment 100% safe?",
-        "Check status of my order",
-        "How to bind my own Gmail?"
+    val quickInquiries = listOf(
+        "Order Delivery Status",
+        "How Escrow Handover Works",
+        "Assistance with Google Binding",
+        "Verification Timeline"
     )
 
     LaunchedEffect(messages.size) {
@@ -74,17 +80,38 @@ fun ChatScreen() {
                     Spacer(modifier = Modifier.width(12.dp))
 
                     Column(modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Official Escrow Desk", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Surface(color = AccentEmerald.copy(alpha = 0.2f), shape = RoundedCornerShape(4.dp)) {
-                                Text("ONLINE", color = AccentEmerald, fontSize = 9.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
-                            }
-                        }
-                        Text("24/7 Live Handover & Verification Specialist", color = TextMuted, fontSize = 12.sp)
+                        Text(
+                            text = "Customer Support Desk",
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp
+                        )
+                        Text(
+                            text = "Direct ticket messaging with platform operator",
+                            color = TextMuted,
+                            fontSize = 12.sp
+                        )
                     }
 
-                    Icon(Icons.Default.Shield, contentDescription = null, tint = AccentCyan, modifier = Modifier.size(20.dp))
+                    IconButton(
+                        onClick = {
+                            coroutineScope.launch {
+                                isRefreshing = true
+                                GamervoultRepository.fetchChatMessages()
+                                isRefreshing = false
+                            }
+                        },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(DarkBackground)
+                    ) {
+                        if (isRefreshing) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), color = PrimaryIndigo, strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = TextSecondary, modifier = Modifier.size(18.dp))
+                        }
+                    }
                 }
             }
         },
@@ -96,20 +123,20 @@ fun ChatScreen() {
                     .background(DarkSurface)
                     .padding(8.dp)
             ) {
-                // Quick inquiry suggestions
+                // Quick prompt suggestions
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(bottom = 8.dp)
                 ) {
-                    items(quickPrompts) { prompt ->
+                    items(quickInquiries) { prompt ->
                         Surface(
                             shape = RoundedCornerShape(16.dp),
                             color = DarkCard,
                             border = BorderStroke(1.dp, DarkBorder),
-                            modifier = Modifier.clickable {
-                                GamervoultRepository.sendMessage(prompt)
+                            modifier = Modifier.clickable(enabled = !isSending) {
+                                inputText = prompt
                             }
                         ) {
                             Text(
@@ -130,7 +157,7 @@ fun ChatScreen() {
                     OutlinedTextField(
                         value = inputText,
                         onValueChange = { inputText = it },
-                        placeholder = { Text("Ask a question about orders or escrow...", color = TextMuted, fontSize = 14.sp) },
+                        placeholder = { Text("Type message for support team...", color = TextMuted, fontSize = 14.sp) },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(24.dp),
                         colors = OutlinedTextFieldDefaults.colors(
@@ -141,24 +168,45 @@ fun ChatScreen() {
                             focusedTextColor = TextPrimary,
                             unfocusedTextColor = TextPrimary
                         ),
-                        maxLines = 3
+                        maxLines = 3,
+                        enabled = !isSending
                     )
 
                     Spacer(modifier = Modifier.width(8.dp))
 
                     IconButton(
                         onClick = {
-                            if (inputText.isNotBlank()) {
-                                GamervoultRepository.sendMessage(inputText)
-                                inputText = ""
+                            if (inputText.isBlank()) return@IconButton
+                            val textToSend = inputText.trim()
+                            inputText = ""
+                            isSending = true
+                            coroutineScope.launch {
+                                val result = GamervoultRepository.sendMessage(textToSend)
+                                isSending = false
+                                if (!result.isSuccess) {
+                                    Toast.makeText(
+                                        context,
+                                        result.exceptionOrNull()?.message ?: "Failed to send message",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
                             }
                         },
+                        enabled = !isSending && inputText.isNotBlank(),
                         modifier = Modifier
-                            .size(48.dp)
+                            .size(46.dp)
                             .clip(CircleShape)
-                            .background(PrimaryIndigo)
+                            .background(if (inputText.isNotBlank() && !isSending) PrimaryIndigo else DarkBorder)
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send", tint = Color.White)
+                        if (isSending) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                        } else {
+                            Icon(
+                                Icons.AutoMirrored.Filled.Send,
+                                contentDescription = "Send",
+                                tint = if (inputText.isNotBlank()) Color.White else TextMuted
+                            )
+                        }
                     }
                 }
             }
@@ -167,64 +215,103 @@ fun ChatScreen() {
         LazyColumn(
             state = listState,
             contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
             items(messages) { msg ->
-                ChatBubble(message = msg)
+                ChatMessageBubble(msg)
             }
         }
     }
 }
 
 @Composable
-fun ChatBubble(message: ChatMessage) {
-    val isStaff = message.isFromStaff
+fun ChatMessageBubble(msg: ChatMessage) {
+    val isUser = !msg.isFromStaff && !msg.isAutomated
+    val isAutomated = msg.isAutomated
 
     Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = if (isStaff) Alignment.Start else Alignment.End
+        horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
     ) {
+        // Sender Label & Badge
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = if (isStaff) Arrangement.Start else Arrangement.End,
-            modifier = Modifier.padding(bottom = 4.dp)
+            modifier = Modifier.padding(bottom = 3.dp)
         ) {
-            Text(
-                text = message.senderName,
-                color = if (isStaff) PrimaryIndigoLight else TextMuted,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = message.timestamp,
-                color = TextMuted,
-                fontSize = 10.sp
-            )
+            if (isUser) {
+                Text(
+                    text = "You",
+                    color = TextMuted,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            } else if (isAutomated) {
+                Surface(
+                    color = AccentAmber.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(4.dp),
+                    border = BorderStroke(0.5.dp, AccentAmber.copy(alpha = 0.4f))
+                ) {
+                    Text(
+                        text = "🤖 System Auto-Reply",
+                        color = AccentAmber,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            } else {
+                Surface(
+                    color = AccentEmerald.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(4.dp),
+                    border = BorderStroke(0.5.dp, AccentEmerald.copy(alpha = 0.4f))
+                ) {
+                    Text(
+                        text = "🛡️ Staff Specialist: ${msg.senderName}",
+                        color = AccentEmerald,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
         }
 
+        // Bubble Content
         Surface(
+            color = when {
+                isUser -> PrimaryIndigo
+                isAutomated -> DarkCard
+                else -> DarkSurface
+            },
             shape = RoundedCornerShape(
-                topStart = 16.dp,
-                topEnd = 16.dp,
-                bottomStart = if (isStaff) 2.dp else 16.dp,
-                bottomEnd = if (isStaff) 16.dp else 2.dp
+                topStart = 14.dp,
+                topEnd = 14.dp,
+                bottomStart = if (isUser) 14.dp else 4.dp,
+                bottomEnd = if (isUser) 4.dp else 14.dp
             ),
-            color = if (isStaff) DarkCard else PrimaryIndigo,
-            border = if (isStaff) ButtonDefaults.outlinedButtonBorder else null,
+            border = if (!isUser) BorderStroke(1.dp, if (isAutomated) DarkBorder else AccentEmerald.copy(alpha = 0.3f)) else null,
             modifier = Modifier.widthIn(max = 300.dp)
         ) {
-            Text(
-                text = message.text,
-                color = TextPrimary,
-                fontSize = 14.sp,
-                lineHeight = 20.sp,
-                modifier = Modifier.padding(14.dp)
-            )
+            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                Text(
+                    text = msg.text,
+                    color = if (isUser) Color.White else TextPrimary,
+                    fontSize = 14.sp
+                )
+
+                if (msg.timestamp.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = msg.timestamp.take(19).replace("T", " "),
+                        color = if (isUser) Color.White.copy(alpha = 0.7f) else TextMuted,
+                        fontSize = 10.sp,
+                        modifier = Modifier.align(Alignment.End)
+                    )
+                }
+            }
         }
     }
 }
-

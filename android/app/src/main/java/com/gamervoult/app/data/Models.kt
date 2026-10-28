@@ -4,14 +4,17 @@ data class ProductItem(
     val id: String,
     val title: String,
     val price: Int,
-    val originalPrice: Int = (price * 1.5).toInt(),
-    val category: String = "VIP Account",
+    val originalPrice: Int? = null,
+    val category: String = "General",
     val description: String = "",
-    val badge: String = "VERIFIED",
-    val level: Int = 70,
-    val evoGuns: Int = 4,
-    val likes: Int = 12500,
-    val isSold: Boolean = false
+    val mediaUrl: String? = null,
+    val images: List<String> = emptyList(),
+    val badge: String? = null,
+    val level: Int? = null,
+    val evoGuns: Int? = null,
+    val likes: Int? = null,
+    val isSold: Boolean = false,
+    val deliveryMode: String = "contact_seller"
 )
 
 data class DeliveryCredentials(
@@ -28,34 +31,30 @@ data class OrderItem(
     val itemId: String,
     val itemTitle: String,
     val amount: Int,
-    val status: String, // PENDING, PAID, EXPIRED, CANCELLED
+    val status: String, // PENDING, PAID, CANCELLED
     val createdAt: String,
     val paidAt: String? = null,
     val utr: String? = null,
     val credentials: DeliveryCredentials? = null
 )
 
-data class StoryItem(
-    val id: String,
-    val title: String,
-    val badge: String,
-    val bannerUrl: String = ""
-)
-
 data class ChatMessage(
     val id: String,
+    val senderId: String? = null,
     val senderName: String,
     val text: String,
     val timestamp: String,
-    val isFromStaff: Boolean
+    val isFromStaff: Boolean = false,
+    val isAutomated: Boolean = false
 )
 
 data class UserProfile(
     val uid: String,
     val email: String,
     val name: String,
-    val role: String, // client, staff, admin, superadmin
-    val status: String,
+    val phone: String? = null,
+    val role: String = "client", // client, staff, admin, superadmin
+    val status: String = "Active",
     val isVip: Boolean = false,
     val subscriptionExpiry: String? = null
 )
@@ -67,4 +66,3 @@ data class AppVersionInfo(
     val isArtifactAvailable: Boolean = false,
     val changelog: String = ""
 )
-

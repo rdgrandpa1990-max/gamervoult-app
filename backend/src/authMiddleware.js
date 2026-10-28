@@ -50,7 +50,52 @@ export function validateHostSecurity(host) {
   return true;
 }
 
-// Verify Firebase ID Token Middleware
+const SESSION_SECRET = process.env.SESSION_SECRET || 'gamervoult_session_signing_secret_key_2026';
+
+export function createSessionToken(payload) {
+  const tokenPayload = {
+    ...payload,
+    exp: Date.now() + 30 * 24 * 60 * 60 * 1000 // 30 days
+  };
+  const data = Buffer.from(JSON.stringify(tokenPayload)).toString('base64url');
+  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(data).digest('base64url');
+  return `gv_sess_${data}.${sig}`;
+}
+
+export function verifySessionToken(token) {
+  if (!token || typeof token !== 'string' || !token.startsWith('gv_sess_')) return null;
+  const raw = token.slice('gv_sess_'.length);
+  const dotIdx = raw.lastIndexOf('.');
+  if (dotIdx === -1) return null;
+  const data = raw.substring(0, dotIdx);
+  const sig = raw.substring(dotIdx + 1);
+  if (!data || !sig) return null;
+  const expectedSig = crypto.createHmac('sha256', SESSION_SECRET).update(data).digest('base64url');
+  if (!timingSafeEqualStr(sig, expectedSig)) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(data, 'base64url').toString('utf8'));
+    if (payload.exp && Date.now() > payload.exp) return null; // Expired
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+export function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
+  return `${salt}:${hash}`;
+}
+
+export function verifyPassword(password, storedHash) {
+  if (!storedHash || typeof storedHash !== 'string' || !storedHash.includes(':')) return false;
+  const [salt, expectedHash] = storedHash.split(':');
+  if (!salt || !expectedHash) return false;
+  const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
+  return timingSafeEqualStr(hash, expectedHash);
+}
+
+// Verify Firebase ID Token / Session Token Middleware
 export async function verifyFirebaseAuth(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -63,7 +108,47 @@ export async function verifyFirebaseAuth(req, res, next) {
 
   const idToken = authHeader.split('Bearer ')[1].trim();
 
-  // Development Mock/Test Token Handler (allowed when ALLOW_DEV_TOKENS is explicitly enabled)
+  // 1. Session Token Handler (Native App Sessions)
+  if (idToken.startsWith('gv_sess_')) {
+    const session = verifySessionToken(idToken);
+    if (!session) {
+      return res.status(401).json({
+        success: false,
+        error: 'SESSION_EXPIRED',
+        message: 'Invalid or expired session. Please log in again.'
+      });
+    }
+
+    const { db } = getFirebaseAdmin();
+    req.uid = session.uid;
+
+    if (db) {
+      try {
+        const userDoc = await db.collection('users').doc(session.uid).get();
+        if (userDoc.exists) {
+          const uData = userDoc.data();
+          req.user = { uid: session.uid, ...uData };
+          req.userRole = uData.role || session.role || 'client';
+        } else {
+          req.user = session;
+          req.userRole = session.role || 'client';
+        }
+      } catch (err) {
+        req.user = session;
+        req.userRole = session.role || 'client';
+      }
+    } else {
+      req.user = session;
+      req.userRole = session.role || 'client';
+    }
+
+    req.isStaff = ['staff', 'employee', 'admin', 'superadmin'].includes(req.userRole);
+    req.isAdmin = ['admin', 'superadmin'].includes(req.userRole);
+    req.isSuperAdmin = req.userRole === 'superadmin';
+    return next();
+  }
+
+  // 2. Development Mock/Test Token Handler (allowed when ALLOW_DEV_TOKENS is explicitly enabled)
   if (process.env.ALLOW_DEV_TOKENS === 'true' && (idToken.startsWith('dev_token:') || idToken.startsWith('dev_token_'))) {
     const parts = idToken.includes(':') ? idToken.split(':') : idToken.split('_');
     const devUid = parts[1] || 'dev_user';
