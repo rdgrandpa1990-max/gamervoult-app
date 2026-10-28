@@ -97,3 +97,32 @@ data class StoreContactSettings(
     val telegram: String = "alexzzzff",
     val brandName: String = "GAMERVAULT STORE"
 )
+
+data class AppVersionCheckResponse(
+    val latestVersionCode: Int = 1,
+    val latestVersionName: String = "1.0.0",
+    val updateAvailable: Boolean = false,
+    val mandatoryUpdate: Boolean = false,
+    val downloadUrl: String? = null,
+    val changelog: String = ""
+)
+
+fun sanitizeMediaUrl(rawUrl: String?): String? {
+    if (rawUrl.isNullOrBlank()) return null
+    val url = rawUrl.trim()
+    if (url.contains("youtube.com/watch", ignoreCase = true) || url.contains("youtu.be", ignoreCase = true)) {
+        val ytId = when {
+            url.contains("v=") -> url.substringAfter("v=").substringBefore("&")
+            url.contains("youtu.be/") -> url.substringAfter("youtu.be/").substringBefore("?").substringBefore("/")
+            else -> ""
+        }
+        if (ytId.isNotBlank()) {
+            return "https://img.youtube.com/vi/$ytId/hqdefault.jpg"
+        }
+    }
+    if (url.contains("cloudinary.com", ignoreCase = true) && url.endsWith(".mp4", ignoreCase = true)) {
+        return url.substring(0, url.length - 4) + ".jpg"
+    }
+    return url
+}
+

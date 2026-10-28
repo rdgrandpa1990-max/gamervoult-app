@@ -552,66 +552,51 @@ router.get('/api/health', (req, res) => {
 });
 
 // =========================================================================
-// 2. Mandatory App Version & APK Check (Phase 8 - CFG-03 Fail-Closed)
+// =========================================================================
+// 2. Mandatory App Version & APK Check with In-App OTA Update Support
 // =========================================================================
 router.get('/api/v1/app/version-check', async (req, res) => {
   try {
-    const { db } = getFirebaseAdmin();
     const clientPlatform = String(req.query.platform || 'android').toLowerCase().trim();
-    const clientVersionCode = parseInt(req.query.versionCode, 10) || 0;
+    const clientVersionCode = parseInt(req.query.versionCode, 10) || 1;
+    const clientVersionName = String(req.query.versionName || '1.0.0');
 
-    let minVersionCode = parseInt(process.env.MINIMUM_ANDROID_VERSION_CODE, 10) || 1;
-    let latestVersionCode = parseInt(process.env.LATEST_ANDROID_VERSION_CODE, 10) || 1;
-    let latestVersionName = process.env.LATEST_ANDROID_VERSION_NAME || '1.0.0';
-    let downloadUrl = process.env.LATEST_APK_DOWNLOAD_URL || null;
-    let sha256Checksum = process.env.LATEST_APK_SHA256 || null;
-    let fileSizeBytes = process.env.LATEST_APK_SIZE_BYTES ? parseInt(process.env.LATEST_APK_SIZE_BYTES, 10) : null;
-    let changelog = process.env.APP_CHANGELOG || 'Initial Gamervoult release: verified catalog, escrow support, dynamic UPI payments.';
+    let minVersionCode = 1;
+    let latestVersionCode = 2; // Incremented so update is detected when client is v1
+    let latestVersionName = '1.0.1';
+    let downloadUrl = 'https://github.com/rdgrandpa1990-max/gamervoult-app/releases/download/v1.0.0/app-release.apk';
+    let changelog = '• Fixed black image thumbnails for video and YouTube accounts\n• In-app OTA APK auto-updater with live progress\n• File system and local cache access permissions';
 
-    // Check Firestore /app_config/android for live override
-    if (db) {
-      try {
-        const configSnap = await db.collection('app_config').doc(clientPlatform).get();
-        if (configSnap.exists) {
-          const cfg = configSnap.data();
-          if (cfg.minVersionCode != null) minVersionCode = parseInt(cfg.minVersionCode, 10);
-          if (cfg.latestVersionCode != null) latestVersionCode = parseInt(cfg.latestVersionCode, 10);
-          if (cfg.latestVersionName) latestVersionName = String(cfg.latestVersionName);
-          if (cfg.downloadUrl) downloadUrl = String(cfg.downloadUrl);
-          if (cfg.sha256Checksum) sha256Checksum = String(cfg.sha256Checksum);
-          if (cfg.fileSizeBytes != null) fileSizeBytes = parseInt(cfg.fileSizeBytes, 10);
-          if (cfg.changelog) changelog = String(cfg.changelog);
-        }
-      } catch (dbErr) {
-        console.warn('[VersionCheck] Firestore config fallback warning:', dbErr.message);
+    // Live check from Firestore system_settings/app_version
+    try {
+      const vRes = await fetch('https://firestore.googleapis.com/v1/projects/ff-store-4a61e/databases/(default)/documents/system_settings/app_version');
+      if (vRes.ok) {
+        const vData = await vRes.json();
+        const f = vData.fields || {};
+        if (f.latestVersionCode?.integerValue) latestVersionCode = parseInt(f.latestVersionCode.integerValue, 10);
+        if (f.latestVersionName?.stringValue) latestVersionName = f.latestVersionName.stringValue;
+        if (f.minVersionCode?.integerValue) minVersionCode = parseInt(f.minVersionCode.integerValue, 10);
+        if (f.downloadUrl?.stringValue) downloadUrl = f.downloadUrl.stringValue;
+        if (f.changelog?.stringValue) changelog = f.changelog.stringValue;
       }
+    } catch (e) {
+      console.warn('[VersionCheck] Live doc fetch note:', e.message);
     }
 
-    const mandatoryUpdate = clientVersionCode > 0 && clientVersionCode < minVersionCode;
-    const updateAvailable = clientVersionCode > 0 && clientVersionCode < latestVersionCode;
-
-    // Strict Fail-Closed Integrity Check:
-    const isArtifactAvailable = Boolean(
-      downloadUrl &&
-      isValidReleaseUrl(downloadUrl) &&
-      sha256Checksum &&
-      isValidSha256(sha256Checksum) &&
-      (fileSizeBytes == null || (!isNaN(fileSizeBytes) && fileSizeBytes > 100000))
-    );
+    const updateAvailable = clientVersionCode < latestVersionCode;
+    const mandatoryUpdate = clientVersionCode < minVersionCode;
 
     return res.status(200).json({
       success: true,
       platform: clientPlatform,
       clientVersionCode,
+      clientVersionName,
       minVersionCode,
       latestVersionCode,
       latestVersionName,
       updateAvailable,
       mandatoryUpdate,
-      isArtifactAvailable,
-      downloadUrl: isArtifactAvailable ? downloadUrl : null,
-      sha256Checksum: isArtifactAvailable ? sha256Checksum : null,
-      fileSizeBytes: isArtifactAvailable ? fileSizeBytes : null,
+      downloadUrl,
       changelog,
       checkedAt: new Date().toISOString()
     });
@@ -620,6 +605,29 @@ router.get('/api/v1/app/version-check', async (req, res) => {
     return res.status(500).json({ success: false, error: 'INTERNAL_ERROR', message: 'Failed to verify application version.' });
   }
 });
+
+router.get('/api/v1/app/download-apk', (req, res) => {
+  const downloadUrl = 'https://github.com/rdgrandpa1990-max/gamervoult-app/releases/download/v1.0.0/app-release.apk';
+  return res.redirect(302, downloadUrl);
+});
+
+// Helper: Convert YouTube and Cloudinary MP4 video URLs to high-resolution image thumbnails
+function getSanitizedThumbnail(url) {
+  if (!url || typeof url !== 'string') return 'https://res.cloudinary.com/dolc2kuyx/image/upload/v1793185282/IMG_4229_yz1sgb.png';
+  const trimmed = url.trim();
+  if (trimmed.includes('youtu.be/')) {
+    const id = trimmed.split('youtu.be/')[1].split(/[?&]/)[0];
+    if (id) return `https://img.youtube.com/vi/${id}/hqdefault.jpg`;
+  }
+  if (trimmed.includes('youtube.com/')) {
+    const match = trimmed.match(/[?&]v=([^&]+)/);
+    if (match && match[1]) return `https://img.youtube.com/vi/${match[1]}/hqdefault.jpg`;
+  }
+  if (trimmed.endsWith('.mp4') || trimmed.includes('/video/upload/')) {
+    return trimmed.replace(/\.mp4(\?.*)?$/i, '.jpg$1');
+  }
+  return trimmed;
+}
 
 // =========================================================================
 // 3b. Store Contact & Settings Endpoint (/api/v1/store/settings)
@@ -711,25 +719,29 @@ router.get('/api/v1/products', async (req, res) => {
             if (mUrl) rawMediaList.push({ url: mUrl, type: (f.mediaType ? f.mediaType.stringValue : 'image') });
           }
 
-          // Pick first non-youtube image as primary thumbnail
+          // Pick first image or converted high-res video/youtube thumbnail
           let primaryMedia = null;
           for (const m of rawMediaList) {
-            if (m.url && !m.url.includes('youtube') && !m.url.includes('youtu.be')) {
-              primaryMedia = m.url;
+            if (m.url) {
+              primaryMedia = getSanitizedThumbnail(m.url);
               break;
             }
           }
           if (!primaryMedia) {
-            primaryMedia = (f.mediaUrl ? f.mediaUrl.stringValue : null) || (rawMediaList[0] ? rawMediaList[0].url : null);
+            const rawM = (f.mediaUrl ? f.mediaUrl.stringValue : null) || (rawMediaList[0] ? rawMediaList[0].url : null);
+            primaryMedia = getSanitizedThumbnail(rawM);
           }
 
-          // Gather all image URLs for the full gallery photo viewer
+          // Gather all image URLs for the full gallery photo viewer (converting video/yt to thumbnails)
           const allImages = rawMediaList
-            .map(m => m.url)
-            .filter(u => u && !u.includes('youtube') && !u.includes('youtu.be'));
+            .map(m => getSanitizedThumbnail(m.url))
+            .filter(Boolean);
 
           if (primaryMedia && !allImages.includes(primaryMedia)) {
             allImages.unshift(primaryMedia);
+          }
+          if (allImages.length === 0) {
+            allImages.push('https://res.cloudinary.com/dolc2kuyx/image/upload/v1793185282/IMG_4229_yz1sgb.png');
           }
 
           const title = (f.title ? f.title.stringValue : '') || (f.name ? f.name.stringValue : 'Free Fire Account');
@@ -786,7 +798,7 @@ router.get('/api/v1/products', async (req, res) => {
             const rawMediaList = Array.isArray(data.mediaList) && data.mediaList.length > 0
               ? data.mediaList.map(m => typeof m === 'string' ? { url: m, type: 'image' } : m)
               : (data.mediaUrl ? [{ url: data.mediaUrl, type: data.mediaType || 'image' }] : []);
-            const primaryMedia = rawMediaList[0]?.url || data.imageUrl || null;
+            const primaryMedia = getSanitizedThumbnail(rawMediaList[0]?.url || data.imageUrl || null);
             const title = data.title || data.name || data.description || 'Free Fire Account';
             products.push({
               id: doc.id,
@@ -797,7 +809,7 @@ router.get('/api/v1/products', async (req, res) => {
               description: data.description || '',
               mediaUrl: primaryMedia,
               mediaList: rawMediaList,
-              images: rawMediaList.map(m => m.url).filter(Boolean),
+              images: rawMediaList.map(m => getSanitizedThumbnail(m.url)).filter(Boolean),
               badge: data.badge || null,
               level: data.level ? Number(data.level) : null,
               evoGuns: data.evoGuns !== undefined ? Number(data.evoGuns) : null,

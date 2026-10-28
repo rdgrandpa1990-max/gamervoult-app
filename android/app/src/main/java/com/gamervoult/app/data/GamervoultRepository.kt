@@ -49,6 +49,35 @@ object GamervoultRepository {
         return res
     }
 
+    private val _appUpdateInfo = MutableStateFlow<AppVersionCheckResponse?>(null)
+    val appUpdateInfo: StateFlow<AppVersionCheckResponse?> = _appUpdateInfo.asStateFlow()
+
+    fun dismissUpdate() {
+        _appUpdateInfo.value = null
+    }
+
+    suspend fun checkAppVersion(context: Context) {
+        try {
+            val pInfo = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.getPackageInfo(context.packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0))
+            } else {
+                context.packageManager.getPackageInfo(context.packageName, 0)
+            }
+            val currentCode = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) pInfo.longVersionCode.toInt() else pInfo.versionCode
+            val currentName = pInfo.versionName ?: "1.0.0"
+
+            val res = ApiClient.checkVersion(currentCode, currentName)
+            if (res.isSuccess) {
+                val info = res.getOrThrow()
+                if (info.updateAvailable) {
+                    _appUpdateInfo.value = info
+                }
+            }
+        } catch (e: Exception) {
+            // Ignore offline version check
+        }
+    }
+
     fun getSessionToken(): String? = sessionToken
 
     fun initSession(context: Context, coroutineScope: CoroutineScope) {
@@ -59,6 +88,7 @@ object GamervoultRepository {
             _isInitializing.value = true
             // Always fetch fresh catalog from real server
             fetchProducts()
+            checkAppVersion(context)
 
             if (!savedToken.isNullOrBlank()) {
                 sessionToken = savedToken

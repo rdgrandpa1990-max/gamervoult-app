@@ -40,6 +40,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
+import com.gamervoult.app.data.sanitizeMediaUrl
 import coil.request.ImageRequest
 import com.gamervoult.app.data.GamervoultRepository
 import com.gamervoult.app.data.OrderItem
@@ -400,7 +402,7 @@ fun HomeScreen(
                                 // Product Photo
                                 AsyncImage(
                                     model = ImageRequest.Builder(context)
-                                        .data(prod.mediaUrl ?: prod.images.firstOrNull())
+                                        .data(sanitizeMediaUrl(prod.mediaUrl ?: prod.images.firstOrNull()))
                                         .crossfade(true)
                                         .build(),
                                     contentDescription = null,
@@ -639,15 +641,66 @@ fun ProductGridCard(
                     .background(DarkSurface),
                 contentAlignment = Alignment.Center
             ) {
-                // Real Free Fire Cloudinary Screenshot from Catalog
-                AsyncImage(
+                // Real Free Fire Cloudinary Screenshot with Fallback (No Black Voids)
+                val targetPhotoUrl = sanitizeMediaUrl(product.mediaUrl ?: product.images.firstOrNull())
+                SubcomposeAsyncImage(
                     model = ImageRequest.Builder(context)
-                        .data(product.mediaUrl ?: product.images.firstOrNull())
+                        .data(targetPhotoUrl)
                         .crossfade(true)
                         .build(),
                     contentDescription = product.title,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    loading = {
+                        Box(
+                            modifier = Modifier.fillMaxSize().background(DarkSurface),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                color = PrimaryIndigo,
+                                strokeWidth = 2.dp
+                            )
+                        }
+                    },
+                    error = {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(Color(0xFF1E1B4B), Color(0xFF0F172A), Color(0xFF18181B))
+                                    )
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.SportsEsports,
+                                    contentDescription = null,
+                                    tint = PrimaryIndigoLight,
+                                    modifier = Modifier.size(34.dp)
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "GAMERVAULT",
+                                    color = Color.White.copy(alpha = 0.9f),
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 10.sp,
+                                    letterSpacing = 1.sp
+                                )
+                                Text(
+                                    text = "VERIFIED ACCOUNT",
+                                    color = AccentAmber,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 8.sp
+                                )
+                            }
+                        }
+                    }
                 )
 
                 // Top-Left Badge: Level
@@ -816,10 +869,12 @@ fun ProductDetailPhotoDialog(
     val context = LocalContext.current
     val allImages = remember(product) {
         val list = mutableListOf<String>()
-        if (!product.mediaUrl.isNullOrBlank()) list.add(product.mediaUrl)
+        val sanitizedMedia = sanitizeMediaUrl(product.mediaUrl)
+        if (!sanitizedMedia.isNullOrBlank()) list.add(sanitizedMedia)
         product.images.forEach { img ->
-            if (img.isNotBlank() && !list.contains(img)) {
-                list.add(img)
+            val sImg = sanitizeMediaUrl(img)
+            if (!sImg.isNullOrBlank() && !list.contains(sImg)) {
+                list.add(sImg)
             }
         }
         if (list.isEmpty()) {
@@ -913,14 +968,24 @@ fun ProductDetailPhotoDialog(
                         .border(1.dp, DarkBorder, RoundedCornerShape(18.dp)),
                     contentAlignment = Alignment.Center
                 ) {
-                    AsyncImage(
+                    SubcomposeAsyncImage(
                         model = ImageRequest.Builder(context)
                             .data(allImages.getOrNull(currentPhotoIndex))
                             .crossfade(true)
                             .build(),
                         contentDescription = "Full Account Photo",
                         contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier.fillMaxSize(),
+                        loading = {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(color = PrimaryIndigo, strokeWidth = 2.dp)
+                            }
+                        },
+                        error = {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text("Preview Unavailable", color = TextMuted, fontSize = 12.sp)
+                            }
+                        }
                     )
 
                     // Photo Counter Badge

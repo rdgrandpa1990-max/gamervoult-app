@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.gamervoult.app.data.sanitizeMediaUrl
 import coil.request.ImageRequest
 import com.gamervoult.app.data.GamervoultRepository
 import com.gamervoult.app.data.OrderItem
@@ -367,7 +368,7 @@ fun ExploreScreen() {
                             ) {
                                 AsyncImage(
                                     model = ImageRequest.Builder(context)
-                                        .data(prod.mediaUrl ?: prod.images.firstOrNull())
+                                        .data(sanitizeMediaUrl(prod.mediaUrl ?: prod.images.firstOrNull()))
                                         .crossfade(true)
                                         .build(),
                                     contentDescription = null,

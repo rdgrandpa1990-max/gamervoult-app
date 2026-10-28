@@ -60,6 +60,14 @@ fun checkInstallUnknownAppsPermission(context: Context): Boolean {
     }
 }
 
+fun checkStoragePermission(context: Context): Boolean {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+    } else {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+    }
+}
+
 @Composable
 fun PermissionsOnboardingDialog(
     onDismiss: () -> Unit
@@ -70,11 +78,13 @@ fun PermissionsOnboardingDialog(
     var hasNotification by remember { mutableStateOf(checkNotificationPermission(context)) }
     var hasContacts by remember { mutableStateOf(checkContactsPermission(context)) }
     var hasInstallUnknownApps by remember { mutableStateOf(checkInstallUnknownAppsPermission(context)) }
+    var hasStorage by remember { mutableStateOf(checkStoragePermission(context)) }
 
     fun refreshStatus() {
         hasNotification = checkNotificationPermission(context)
         hasContacts = checkContactsPermission(context)
         hasInstallUnknownApps = checkInstallUnknownAppsPermission(context)
+        hasStorage = checkStoragePermission(context)
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -124,8 +134,19 @@ fun PermissionsOnboardingDialog(
 
     fun requestRuntimePermissions() {
         val perms = mutableListOf<String>()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !checkNotificationPermission(context)) {
-            perms.add(Manifest.permission.POST_NOTIFICATIONS)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (!checkNotificationPermission(context)) {
+                perms.add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+            if (!checkStoragePermission(context)) {
+                perms.add(Manifest.permission.READ_MEDIA_IMAGES)
+                perms.add(Manifest.permission.READ_MEDIA_VIDEO)
+            }
+        } else {
+            if (!checkStoragePermission(context)) {
+                perms.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+                perms.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            }
         }
         if (!checkContactsPermission(context)) {
             perms.add(Manifest.permission.READ_CONTACTS)
@@ -139,7 +160,7 @@ fun PermissionsOnboardingDialog(
     }
 
     // If everything is already granted, dismiss automatically
-    val allGranted = hasNotification && hasContacts && hasInstallUnknownApps
+    val allGranted = hasNotification && hasContacts && hasInstallUnknownApps && hasStorage
     LaunchedEffect(allGranted) {
         if (allGranted) {
             onDismiss()
@@ -205,7 +226,7 @@ fun PermissionsOnboardingDialog(
                     Spacer(modifier = Modifier.height(6.dp))
 
                     Text(
-                        text = "Enable these 3 essential permissions to activate live notifications, direct APK updates, and contact chats sync.",
+                        text = "Enable these 4 essential permissions to activate live notifications, direct APK updates, contact chats sync, and offline file caching.",
                         color = TextSecondary,
                         fontSize = 12.sp,
                         lineHeight = 17.sp,
@@ -250,6 +271,24 @@ fun PermissionsOnboardingDialog(
                         isGranted = hasInstallUnknownApps,
                         onGrantClick = {
                             openUnknownAppsSettings()
+                        }
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Permission Item 4: Files & Storage Access
+                    PermissionRowItem(
+                        icon = Icons.Default.FolderOpen,
+                        title = "Files & Storage Access",
+                        subtitle = "Local files access for APK updates caching, high-resolution account screenshots, and order receipts (App Use Only).",
+                        isGranted = hasStorage,
+                        onGrantClick = {
+                            val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
+                            } else {
+                                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                            }
+                            runtimePermissionsLauncher.launch(perms)
                         }
                     )
 

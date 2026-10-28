@@ -15,7 +15,7 @@ object ApiClient {
     private const val BASE_URL = "https://gamervoult-backend.vercel.app"
     private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
 
-    private val client = OkHttpClient.Builder()
+    val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .writeTimeout(20, TimeUnit.SECONDS)
@@ -218,8 +218,9 @@ object ApiClient {
                     }
                 }
 
-                val rawMedia = if (p.has("mediaUrl") && !p.isNull("mediaUrl")) p.getString("mediaUrl") else null
-                val finalMedia = rawMedia ?: imagesList.firstOrNull()
+                val sanitizedImages = imagesList.mapNotNull { sanitizeMediaUrl(it) }
+                val rawMedia = if (p.has("mediaUrl") && !p.isNull("mediaUrl")) sanitizeMediaUrl(p.getString("mediaUrl")) else null
+                val finalMedia = rawMedia ?: sanitizedImages.firstOrNull()
                 val acctUid = if (p.has("accountUid") && !p.isNull("accountUid")) p.getString("accountUid") else (if (p.has("gameUid") && !p.isNull("gameUid")) p.getString("gameUid") else null)
 
                 list.add(
@@ -231,7 +232,7 @@ object ApiClient {
                         category = p.optString("category", "General"),
                         description = p.optString("description", ""),
                         mediaUrl = finalMedia,
-                        images = imagesList,
+                        images = sanitizedImages.ifEmpty { if (finalMedia != null) listOf(finalMedia) else emptyList() },
                         badge = if (p.has("badge") && !p.isNull("badge")) p.getString("badge") else null,
                         level = if (p.has("level") && !p.isNull("level")) p.getInt("level") else null,
                         evoGuns = if (p.has("evoGuns") && !p.isNull("evoGuns")) p.getInt("evoGuns") else null,
@@ -276,6 +277,33 @@ object ApiClient {
                 Result.success(StoreContactSettings(wa, tg, bn))
             } else {
                 Result.failure(Exception("Failed to fetch store settings"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // 4c. Version Check & In-App OTA Update Verification
+    suspend fun checkVersion(versionCode: Int, versionName: String): Result<AppVersionCheckResponse> = withContext(Dispatchers.IO) {
+        try {
+            val encName = java.net.URLEncoder.encode(versionName, "UTF-8")
+            val request = Request.Builder()
+                .url("$BASE_URL/api/v1/app/version-check?versionCode=$versionCode&versionName=$encName")
+                .get()
+                .build()
+            val response = client.newCall(request).execute()
+            val raw = response.body?.string() ?: ""
+            val obj = JSONObject(raw)
+            if (response.isSuccessful && obj.optBoolean("success", false)) {
+                val latestCode = obj.optInt("latestVersionCode", 1)
+                val latestName = obj.optString("latestVersionName", "1.0.0")
+                val updateAvail = obj.optBoolean("updateAvailable", false)
+                val mandatory = obj.optBoolean("mandatoryUpdate", false)
+                val dlUrl = if (obj.has("downloadUrl") && !obj.isNull("downloadUrl")) obj.getString("downloadUrl") else null
+                val log = obj.optString("changelog", "Performance improvements & bug fixes.")
+                Result.success(AppVersionCheckResponse(latestCode, latestName, updateAvail, mandatory, dlUrl, log))
+            } else {
+                Result.failure(Exception("Failed to check version"))
             }
         } catch (e: Exception) {
             Result.failure(e)

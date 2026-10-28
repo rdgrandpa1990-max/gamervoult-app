@@ -49,12 +49,14 @@ fun AppRoot() {
 fun MainAppScaffold() {
     val context = LocalContext.current
     var currentScreen by remember { mutableStateOf(Screen.HOME) }
+    val appUpdateInfo by GamervoultRepository.appUpdateInfo.collectAsStateWithLifecycle()
 
     var showPermissionsDialog by remember {
         mutableStateOf(
             !checkNotificationPermission(context) ||
             !checkContactsPermission(context) ||
-            !checkInstallUnknownAppsPermission(context)
+            !checkInstallUnknownAppsPermission(context) ||
+            !checkStoragePermission(context)
         )
     }
 
@@ -117,6 +119,11 @@ fun MainAppScaffold() {
     if (showPermissionsDialog) {
         PermissionsOnboardingDialog(
             onDismiss = { showPermissionsDialog = false }
+        )
+    } else if (appUpdateInfo != null) {
+        AppUpdateDialog(
+            updateInfo = appUpdateInfo!!,
+            onDismiss = { GamervoultRepository.dismissUpdate() }
         )
     }
 }
